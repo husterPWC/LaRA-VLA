@@ -144,7 +144,9 @@ pipeline documented in
 |  | UD-VLA (Chen et al., 2025b) | 58.3 | 62.5 | 54.1 | 75.0 | 62.5 |
 | Latent CoT | **LaRA-VLA (Ours)** | 95.8 | 62.5 | 25.0 | 91.7 | **68.8** |
 
+## Acknowledgments
 
+Our code builds on the open-source [StarVLA](https://github.com/starVLA/starVLA) codebase, and incorporates ideas and components from [Coconut](https://github.com/facebookresearch/coconut) and [ECOT (Embodied Chain-of-Thought)](https://github.com/MichalZawalski/embodied-CoT).
 
 ## Citation
 
