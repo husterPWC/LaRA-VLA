@@ -36,11 +36,6 @@
   </sub>
 </p>
 
-## Method Overview
-
-This repository builds on the open-source StarVLA codebase and focuses on
-**implicit latent reasoning** for VLA policy learning. The active code
-namespace in this repository is `laravla/`.
 
 ## NEWS
 - 🎉 LaRA-VLA has been accepted to **[ICML 2026](https://icml.cc/Conferences/2026)**.
