@@ -1,4 +1,4 @@
-<h1 align="center">LaRA-VLA</h1>
+<h1 align="center">[ICML 2026] LaRA-VLA</h1>
 
 <p align="center">
   <strong>Latent Reasoning VLA: Latent Thinking and Prediction for Vision-Language-Action Models</strong>
@@ -43,7 +43,7 @@ This repository builds on the open-source StarVLA codebase and focuses on
 namespace in this repository is `laravla/`.
 
 ## NEWS
-
+- 🎉 LaRA-VLA has been accepted to **[ICML 2026](https://icml.cc/Conferences/2026)**.
 - ✅ Training code is released.
 - ✅ Evaluation code is released.
 - ⏳ Pretrained model weights are not released yet.
