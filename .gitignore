@@ -18,6 +18,8 @@ outputs/
 outputs2/
 outputs*/
 qwen_cache/
+.hf_bridge_repo/
+.hf_bridge_repo_data/
 .cursor/
 results1/
 # Byte-compiled / optimized / DLL files
