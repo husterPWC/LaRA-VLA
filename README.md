@@ -20,6 +20,12 @@
   <a href="https://github.com/LoveJu1y/LaRA-VLA">
     <img src="https://img.shields.io/badge/GitHub-LaRA--VLA-181717?style=for-the-badge&logo=github" alt="GitHub">
   </a>
+  <a href="https://huggingface.co/datasets/lovejuly">
+    <img src="https://img.shields.io/badge/Hugging%20Face-Datasets-ffbf00?style=for-the-badge" alt="Hugging Face Datasets">
+  </a>
+  <a href="https://huggingface.co/lovejuly">
+    <img src="https://img.shields.io/badge/Hugging%20Face-Models-ffbf00?style=for-the-badge" alt="Hugging Face Models">
+  </a>
   <a href="./LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge" alt="License">
   </a>
@@ -36,13 +42,13 @@
   </sub>
 </p>
 
-
 ## NEWS
+
 - 🎉 LaRA-VLA has been accepted to **[ICML 2026](https://icml.cc/Conferences/2026)**.
 - ✅ Training code is released.
 - ✅ Evaluation code is released.
-- ⏳ Pretrained model weights are not released yet.
-- ⏳ Training datasets are not released yet.
+- ✅ Pretrained model weights are released.
+- ✅ Training datasets are released.
 
 ## Installation
 
@@ -67,6 +73,46 @@ python -c "from laravla.training.train import main; print('OK')"
 ```
 
 ### 2) Multi-stage training for VLM 
+
+Before launching training, set the dataset roots and model cache path:
+
+```bash
+export BRIDGE_LEROBOT_ROOT=/path/to/bridge_datasets_parent
+export LIBERO_LEROBOT_ROOT=/path/to/libero_lerobot
+export HF_HOME=/path/to/qwen_cache
+```
+
+Dataset repos:
+
+- Bridge: https://huggingface.co/datasets/lovejuly/bridge_orig_lerobot
+- LIBERO: https://huggingface.co/datasets/lovejuly/libero_lerobot_all
+
+Model repos:
+
+- Bridge: https://huggingface.co/lovejuly/LaRA-VLA-bridge
+- LIBERO: https://huggingface.co/lovejuly/LaRA-VLA-libero
+
+Bridge training expects:
+
+```text
+${BRIDGE_LEROBOT_ROOT}/bridge_orig_lerobot/
+  annotations/
+  meta/
+  data/
+  videos/
+```
+
+The current public Bridge dataset release contains the core annotations and metadata, but does not include the raw `videos/` directory. Bridge training will not run unless `videos/` is available locally under the structure above.
+
+LIBERO training expects:
+
+```text
+${LIBERO_LEROBOT_ROOT}/
+  libero_goal_no_noops_1.0.0_lerobot/
+  libero_object_no_noops_1.0.0_lerobot/
+  libero_spatial_no_noops_1.0.0_lerobot/
+  libero_10_no_noops_1.0.0_lerobot/
+```
 
 Bridge:
 
