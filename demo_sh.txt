@@ -1,0 +1,46 @@
+# 旧日志可能是不完整的。正式评估前建议清掉：
+conda activate lara-vla
+cd /data/peixingxing/codevla/lara_repro/LaRA-VLA
+
+pkill -f server_policy.py || true
+pkill -f eval_libero.py || true
+
+OUT=/data/peixingxing/models/LaRA-VLA-libero/checkpoints/eval_libero_implicit_parallel/steps_25000_pytorch_model
+
+rm -rf $OUT/logs
+rm -rf $OUT/videos
+rm -rf $OUT/server_logs
+
+# 启动评估：
+conda activate lara-vla
+cd /data/peixingxing/codevla/lara_repro/LaRA-VLA
+
+pkill -f server_policy.py || true
+pkill -f eval_libero.py || true
+
+OUT=/data/peixingxing/models/LaRA-VLA-libero/checkpoints/eval_libero_implicit_parallel/steps_25000_pytorch_model
+rm -rf $OUT/logs $OUT/videos $OUT/server_logs
+
+export CONDA_BASE=$(conda info --base)
+export LARAVLA_PYTHON=$CONDA_BASE/envs/lara-vla/bin/python
+export LIBERO_PYTHON=$CONDA_BASE/envs/libero-lara/bin/python
+
+export LIBERO_HOME=/data/peixingxing/codevla/lara_repro/LIBERO
+export LIBERO_CONFIG_PATH=$LIBERO_HOME/libero
+export PYTHONPATH=/data/peixingxing/codevla/lara_repro/LIBERO:$PYTHONPATH
+
+export HF_ENDPOINT=https://hf-mirror.com
+
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __EGL_VENDOR_LIBRARY_FILENAMES=/data/peixingxing/.local/share/glvnd/egl_vendor.d/10_nvidia.json
+unset MUJOCO_EGL_DEVICE_ID
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export TASK_SUITES=libero_goal,libero_spatial,libero_object,libero_10
+export NUM_TRIALS_PER_TASK=50
+export SAVE_VIDEOS=false
+
+bash examples/LIBERO/eval_libero_all.sh \
+  /data/peixingxing/models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt

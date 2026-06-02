@@ -1,9 +1,3 @@
-import os
-import sys
-os.environ["HOME"] = "/data/peixingxing"
-os.environ["LIBERO_CONFIG_PATH"] = "/data/peixingxing/.libero"
-sys.path.insert(0, "/data/peixingxing/codevla/lara_repro/LIBERO")
-
 import dataclasses
 import datetime as dt
 import json
