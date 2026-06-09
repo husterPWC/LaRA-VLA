@@ -1,8 +1,16 @@
 import os
 import sys
-os.environ["HOME"] = "/data/peixingxing"
-os.environ["LIBERO_CONFIG_PATH"] = "/data/peixingxing/.libero"
-sys.path.insert(0, "/data/peixingxing/codevla/lara_repro/LIBERO")
+# os.environ["HOME"] = "/data/peixingxing"
+# os.environ["LIBERO_CONFIG_PATH"] = "/data/peixingxing/.libero"
+# sys.path.insert(0, "/data/peixingxing/codevla/lara_repro/LIBERO")
+
+
+libero_home = os.environ.get("LIBERO_HOME", "")
+if libero_home and libero_home not in sys.path:
+    sys.path.insert(0, libero_home)
+
+if "LIBERO_CONFIG_PATH" not in os.environ and libero_home:
+    os.environ["LIBERO_CONFIG_PATH"] = os.path.join(libero_home, "libero")
 
 import dataclasses
 import datetime as dt
