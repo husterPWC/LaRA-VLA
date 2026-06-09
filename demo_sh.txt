@@ -44,3 +44,31 @@ export SAVE_VIDEOS=false
 
 bash examples/LIBERO/eval_libero_all.sh \
   /data/peixingxing/models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt
+
+
+新开终端执行：
+
+tail -f /home/robot/codePWC/lara_repro/models/LaRA-VLA-libero/checkpoints/eval_libero_implicit_parallel/steps_25000_pytorch_model/server_logs/server_10093.log
+
+如果正常，会看到类似：
+
+Loading from local checkpoint path ...
+server running ...
+server listening on 0.0.0.0:10093
+connection open
+
+
+
+
+运行过程中另开终端：
+
+watch -n 1 nvidia-smi
+
+运行完看结果:
+OUT=/home/robot/codePWC/lara_repro/models/LaRA-VLA-libero/checkpoints/eval_libero_implicit_parallel/steps_25000_pytorch_model
+
+grep -Rni "Total success rate\|Total episodes" $OUT/logs
+
+tail -n 120 $OUT/logs/libero_goal.log
+
+find $OUT -type f -name "*.mp4" -ls | head -20
