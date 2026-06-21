@@ -26,7 +26,8 @@ from lara_vla.data.spatial_cot_dataset import SpatialCoTDataset
 
 SPATIAL = str(_REPO / "output" / "spatial_lara_libero")  # NPZ data root
 INDEX = str(_REPO / "output" / "spatial_lara_libero_no_noops" / "spatial_lara_libero_index_cot_transition_all.jsonl")
-COT = "/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all"
+COT = os.environ.get('LEROBOT_ROOT',
+                      str(_REPO.parent / 'datasets/lovejuly/libero_lerobot_all'))
 ALIGN = SPATIAL + "/cot_spatial_alignment.json"
 OUT_DIR = _REPO / "output" / "mask_videos"
 

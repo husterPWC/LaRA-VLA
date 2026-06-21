@@ -14,7 +14,7 @@ from pathlib import Path; from PIL import Image, ImageDraw
 _THIS = Path(__file__).resolve(); _REPO = _THIS.parents[1]; sys.path.insert(0, str(_REPO))
 
 SPATIAL = _REPO / "output" / "spatial_lara_libero"
-COT_ROOT = Path("/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all")
+COT = os.environ.get("LEROBOT_ROOT", str(_REPO.parent / "datasets/lovejuly/libero_lerobot_all")))
 OUT = _REPO / "output" / "alignment_verification"
 
 

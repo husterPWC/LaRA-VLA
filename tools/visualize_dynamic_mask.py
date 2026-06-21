@@ -32,7 +32,7 @@ from lara_vla.data.spatial_lara_libero_dataset import SpatialLaRALiberoDataset
 
 SPATIAL_ROOT = str(_REPO / "output" / "spatial_lara_libero")
 INDEX_PATH = str(_REPO / "output" / "spatial_lara_libero" / "spatial_lara_libero_index_cot.jsonl")
-COT_ROOT = "/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all"
+COT = os.environ.get("LEROBOT_ROOT", str(_REPO.parent / "datasets/lovejuly/libero_lerobot_all"))
 ALIGN_PATH = str(_REPO / "output" / "spatial_lara_libero" / "cot_spatial_alignment.json")
 
 

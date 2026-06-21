@@ -3,9 +3,12 @@
 import os, sys, json, numpy as np, h5py, pandas as pd, imageio
 from pathlib import Path; from PIL import Image
 
-NOOP_DIR = Path('/home/robot/codePWC/lara_repro/datasets/clip-rt/modified_libero_hdf5')
-LEROBOT = Path('/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all')
-OUT_BASE = Path('/home/robot/codePWC/lara_repro/LaRA-VLA/output/spatial_lara_libero')
+_REPO = Path(__file__).resolve().parents[1]
+_LARA_REPRO = _REPO.parent
+
+NOOP_DIR = Path(os.environ.get('NOOP_HDF5_ROOT', str(_LARA_REPRO / 'datasets/clip-rt/modified_libero_hdf5')))
+LEROBOT = Path(os.environ.get('LEROBOT_ROOT', str(_LARA_REPRO / 'datasets/lovejuly/libero_lerobot_all')))
+OUT_BASE = _REPO / 'output' / 'spatial_lara_libero'
 RES, FK = 224, 8
 CAMS = ['agentview', 'robot0_eye_in_hand']
 
@@ -21,9 +24,11 @@ def resolve_seg_id(obj_name, inst_to_id):
             return sid
     return None
 
-os.environ.setdefault('LIBERO_HOME', '/home/robot/codePWC/lara_repro/LIBERO')
-os.environ.setdefault('LIBERO_CONFIG_PATH', '/home/robot/codePWC/lara_repro/LIBERO/libero')
-sys.path.insert(0, '/home/robot/codePWC/lara_repro/LIBERO')
+_LIBERO = os.environ.get('LIBERO_HOME', str(_LARA_REPRO / 'LIBERO'))
+os.environ.setdefault('LIBERO_HOME', _LIBERO)
+os.environ.setdefault('LIBERO_CONFIG_PATH', str(Path(_LIBERO) / 'libero'))
+if _LIBERO not in sys.path:
+    sys.path.insert(0, _LIBERO)
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 

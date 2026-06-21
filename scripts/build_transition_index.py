@@ -8,8 +8,10 @@ import json, os, sys
 from collections import defaultdict, Counter
 from pathlib import Path
 
-SPATIAL = Path('/home/robot/codePWC/lara_repro/LaRA-VLA/output/spatial_lara_libero')
-LEROBOT = Path('/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all')
+_REPO = Path(__file__).resolve().parents[1]
+_LARA_REPRO = _REPO.parent
+SPATIAL = _REPO / 'output' / 'spatial_lara_libero'
+LEROBOT = Path(os.environ.get('LEROBOT_ROOT', str(_LARA_REPRO / 'datasets/lovejuly/libero_lerobot_all')))
 OUT = SPATIAL / 'spatial_lara_libero_index_cot_transition_all.jsonl'
 SUITES = ['libero_spatial', 'libero_object', 'libero_goal', 'libero_10']
 

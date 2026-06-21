@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """Quick test for task_04 mask filtering logic."""
 import json, sys, numpy as np
-sys.path.insert(0, '/home/robot/codePWC/lara_repro/LaRA-VLA')
+sys.path.insert(0, 'str(_REPO.parent)/LaRA-VLA')
 from lara_vla.data.spatial_cot_dataset import SpatialCoTDataset
 
-SPATIAL = '/home/robot/codePWC/lara_repro/LaRA-VLA/output/spatial_lara_libero'
+SPATIAL = 'str(_REPO.parent)/LaRA-VLA/output/spatial_lara_libero'
 ds = SpatialCoTDataset(
     SPATIAL, SPATIAL + '/spatial_lara_libero_index_cot.jsonl',
-    '/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all',
+    'str(_REPO.parent)/datasets/lovejuly/libero_lerobot_all',
     SPATIAL + '/cot_spatial_alignment.json',
     enable_dynamic_mask=True)
 

@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 
-SPATIAL = Path('/home/robot/codePWC/lara_repro/LaRA-VLA/output/spatial_lara_libero')
+_REPO = Path(__file__).resolve().parents[1]
+SPATIAL = _REPO / 'output' / 'spatial_lara_libero'
 FK = 8
 
 for suite in ['libero_spatial', 'libero_object', 'libero_goal']:

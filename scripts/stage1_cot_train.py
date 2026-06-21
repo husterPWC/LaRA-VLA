@@ -27,10 +27,12 @@ from laravla.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
 
-CKPT = "/home/robot/codePWC/lara_repro/models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt"
+_LARA_REPRO = _REPO.parent
+CKPT = os.environ.get('LARAVLA_CKPT',
+                       str(_LARA_REPRO / 'models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt'))
 SPATIAL = str(_REPO / "output" / "spatial_lara_libero")
 INDEX = str(_REPO / "output" / "spatial_lara_libero_no_noops" / "spatial_lara_libero_index_cot_transition_all.jsonl")
-COT = "/home/robot/codePWC/lara_repro/datasets/lovejuly/libero_lerobot_all"
+COT = os.environ.get('LEROBOT_ROOT', str(_LARA_REPRO / 'datasets/lovejuly/libero_lerobot_all'))
 
 VLM_PROMPT = (
     "Robot task reasoning: first output the Subtask to perform next, "
