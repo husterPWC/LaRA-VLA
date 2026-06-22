@@ -427,8 +427,8 @@ class SpatialCoTDataset(SpatialLaRALiberoDataset):
                 mask_a |= (seg == sid).astype(np.uint8)
                 mask_w |= (seg_w == sid).astype(np.uint8)
 
-        sample["affordance_mask_agentview"] = mask_a[np.newaxis, ...]
-        sample["affordance_mask_wrist"] = mask_w[np.newaxis, ...]
+        sample["current_affordance_mask_agentview"] = mask_a[np.newaxis, ...]
+        sample["current_affordance_mask_wrist"] = mask_w[np.newaxis, ...]
 
         # Rebuild future masks (using HDF5 frame index)
         seg_f = data["seg_agentview"][future_h5]
