@@ -63,7 +63,7 @@ def build_video(ds, suite, task_id, demo_id):
         s = ds[idx]
         h5f = s["hdf5_frame_idx"]
         rgb = ds._load_episode(ds.entries[idx]["episode_path"])["rgb_agentview"][h5f].copy()
-        mask = s["affordance_mask_agentview"].squeeze()
+        mask = s["current_affordance_mask_agentview"].squeeze()
         frames.append(make_overlay(rgb, mask))
         if t % 50 == 0 and t > 0:
             print(".", end="", flush=True)
