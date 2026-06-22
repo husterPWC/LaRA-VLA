@@ -102,8 +102,8 @@ def main():
         # Sanity checks
         B = args.batch_size
         # Mask binary
-        assert batch["affordance_mask_agentview"].max() <= 1.0
-        assert batch["affordance_mask_agentview"].min() >= 0.0
+        assert batch["current_affordance_mask_agentview"].max() <= 1.0
+        assert batch["current_affordance_mask_agentview"].min() >= 0.0
         # Image range
         assert 0.0 <= batch["image_agentview"].max() <= 1.0
         # Pose valid

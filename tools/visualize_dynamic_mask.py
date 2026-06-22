@@ -156,7 +156,7 @@ def main():
                 union_mask |= (seg_agentview == sid)
 
         # Filtered mask: use the already-computed mask from SpatialCoTDataset
-        filtered_mask = sample["affordance_mask_agentview"].squeeze().astype(bool)
+        filtered_mask = sample["current_affordance_mask_agentview"].squeeze().astype(bool)
 
         # Build visualization
         union_overlay = make_overlay(rgb_agentview, union_mask, color=(255, 255, 0), alpha=0.4)   # yellow = union
