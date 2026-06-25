@@ -172,11 +172,18 @@ def main():
         labels = labels.to(model.device)
 
         # Forward + CoT loss
-        outputs = model(**inputs, labels=labels)
+        with torch.autograd.set_detect_anomaly(True):
+            outputs = model(**inputs, labels=labels)
         loss = outputs.loss
 
         if loss is None or torch.isnan(loss):
-            print(f"  Step {step}: loss is None/NaN, skipping")
+            # Debug: check logits for NaN
+            if hasattr(outputs, 'logits') and outputs.logits is not None:
+                has_nan = torch.isnan(outputs.logits).any().item()
+                print(f"  Step {step}: loss NaN, logits NaN={has_nan}, max_logit={outputs.logits.max().item():.2f}")
+            else:
+                print(f"  Step {step}: loss NaN, no logits")
+            # Don't skip on NaN — let it crash with traceback to see origin
             continue
 
         loss.backward()
