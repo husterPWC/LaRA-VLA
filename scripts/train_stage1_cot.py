@@ -240,6 +240,9 @@ def save_checkpoint(accelerator, model, step, output_dir, is_final=False):
     else:
         ckpt_dir = Path(output_dir) / "checkpoints"
         ckpt_path = ckpt_dir / f"steps_{step}_pytorch_model.pt"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = Path(output_dir) / "summary.jsonl"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     state_dict = accelerator.get_state_dict(model)
     torch.save(state_dict, str(ckpt_path))
 
@@ -553,6 +556,10 @@ def main(cfg):
             start_step = 0
 
     # ── Training loop ─────────────────────────────────────────
+    # Ensure output directories exist
+    output_dir = str(_REPO / cfg.run_root_dir)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     if accelerator.is_main_process:
         logger.info(f"\n=== Starting training (step {start_step} → {total_steps}) ===")
 
