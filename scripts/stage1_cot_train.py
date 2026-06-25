@@ -180,6 +180,7 @@ def main():
             continue
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], max_norm=1.0)
         optimizer.step()
         optimizer.zero_grad()
 
