@@ -81,18 +81,23 @@ def main():
     print(f"\nLoading model from {CKPT}...")
     from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-    # Load base VLM + processor
+    # Load LaRA-VLA model via its own framework (handles key remapping)
     from laravla.model.tools import read_mode_config
-    model_config, _ = read_mode_config(Path(CKPT))
+    from laravla.model.framework.base_framework import baseframework
+
+    model_config, norm_stats = read_mode_config(Path(CKPT))
+    vla = baseframework.from_pretrained(CKPT)
+    # Get the underlying Qwen3-VL model from LaRA-VLA wrapper
+    model = vla.qwen_vl_interface.model  # the actual Qwen3VLForConditionalGeneration
+    vla = vla.to("cuda")  # move wrapper to GPU
+
+    # Load processor
     base_vlm_path = model_config.get("framework", {}).get("qwenvl", {}).get(
         "base_vlm", "StarVLA/Qwen3-VL-4B-Instruct-Action")
-
     print(f"Base VLM: {base_vlm_path}")
+    from transformers import AutoProcessor
     processor = AutoProcessor.from_pretrained(base_vlm_path, trust_remote_code=True)
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        base_vlm_path, trust_remote_code=True,
-        torch_dtype=torch.bfloat16, device_map="auto"
-    )
+
     model.train()
     model.gradient_checkpointing_enable()
 
@@ -100,11 +105,9 @@ def main():
     total_layers = len(model.model.language_model.layers)
     for i, layer in enumerate(model.model.language_model.layers):
         for p in layer.parameters():
-            p.requires_grad = (i >= total_layers - 2)  # last 2 layers only
-    # Also train lm_head
+            p.requires_grad = (i >= total_layers - 2)
     for p in model.lm_head.parameters():
         p.requires_grad = True
-    # Freeze vision
     for p in model.visual.parameters():
         p.requires_grad = False
 
