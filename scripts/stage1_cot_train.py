@@ -163,10 +163,11 @@ def main():
             ]}]
             prompt_texts.append(processor.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True))
         prompt_inputs = processor(text=prompt_texts, images=images_pil, return_tensors="pt", padding=True)
-        prompt_lens = prompt_inputs["input_ids"].shape[1]
+        prompt_lens = prompt_inputs["attention_mask"].sum(dim=1)  # per-sample actual length
 
         labels = inputs["input_ids"].clone()
-        labels[:, :prompt_lens] = -100  # mask user prompt
+        for i, plen in enumerate(prompt_lens):
+            labels[i, :plen] = -100  # mask user prompt per sample
         labels[labels == processor.tokenizer.pad_token_id] = -100
 
         # Forward + CoT loss
