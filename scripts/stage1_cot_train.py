@@ -153,16 +153,21 @@ def main():
         inputs = processor(text=texts, images=images_pil, return_tensors="pt", padding=True)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        # Labels: tokenize ONLY assistant CoT, pad to match, mask user prompt
+        # Labels: tokenize ONLY assistant CoT, pad/truncate to match input
         cot_only = [batch['cot_text_transition'][i] for i in range(len(batch['instruction']))]
         cot_inputs = processor(text=cot_only, return_tensors="pt", padding=True)
-        labels = cot_inputs["input_ids"].clone()
-        # Pad labels to match input length (prepend -100 for user+image tokens)
-        pad_len = inputs["input_ids"].shape[1] - labels.shape[1]
-        labels = torch.cat([
-            torch.full((labels.shape[0], pad_len), -100, dtype=labels.dtype),
-            labels,
-        ], dim=1)
+        labels_raw = cot_inputs["input_ids"]
+        L_in = inputs["input_ids"].shape[1]
+        L_cot = labels_raw.shape[1]
+        if L_cot >= L_in:
+            # CoT too long: truncate
+            labels = labels_raw[:, -L_in:]
+        else:
+            # Pad: prepend -100 for user+image tokens
+            labels = torch.cat([
+                torch.full((labels_raw.shape[0], L_in - L_cot), -100, dtype=labels_raw.dtype),
+                labels_raw,
+            ], dim=1)
         labels[labels == processor.tokenizer.pad_token_id] = -100
         labels = labels.to(model.device)
 
