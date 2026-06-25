@@ -304,9 +304,14 @@ def save_checkpoint(accelerator, model, step, output_dir, is_final=False):
 # ==================================================================
 
 @torch.no_grad()
-def _eval_val_loss(model, val_loader, processor, accelerator, max_batches=50):
-    """Compute average val loss over max_batches."""
+def _eval_val_loss(model, val_dataset, processor, accelerator, max_batches=50, batch_size=2):
+    """Compute average val loss over max_batches using a fresh DataLoader each call."""
     model.eval()
+    # Fresh loader each eval to avoid stale iterator state
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=True,
+        collate_fn=collate_fn, num_workers=0, pin_memory=True,
+    )
     total_loss = 0.0
     count = 0
     for batch in val_loader:
@@ -328,7 +333,7 @@ def _eval_val_loss(model, val_loader, processor, accelerator, max_batches=50):
             loss = outputs.loss
 
         if loss is not None and not torch.isnan(loss):
-            total_loss += accelerator.gather(loss).mean().item()
+            total_loss += loss.item()
             count += 1
 
     model.train()
@@ -336,9 +341,14 @@ def _eval_val_loss(model, val_loader, processor, accelerator, max_batches=50):
 
 
 @torch.no_grad()
-def _generate_cot_samples(model, val_loader, processor, accelerator, num_samples=4):
+def _generate_cot_samples(model, val_dataset, processor, accelerator, num_samples=4, batch_size=2):
     """Generate CoT text samples from val set for qualitative inspection."""
     model.eval()
+    # Fresh loader each eval
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=True,
+        collate_fn=collate_fn, num_workers=0, pin_memory=True,
+    )
     samples = []
     for batch in val_loader:
         if len(samples) >= num_samples:
@@ -474,15 +484,9 @@ def main(cfg):
         num_workers=cfg.trainer.get("num_workers", 2),
         pin_memory=True,
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=cfg.trainer.per_device_batch_size, shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=cfg.trainer.get("num_workers", 2),
-        pin_memory=True,
-    )
     if accelerator.is_main_process:
         logger.info(f"  Train: {len(train_ds)} samples, {len(train_loader)} batches")
-        logger.info(f"  Val:   {len(val_ds)} samples, {len(val_loader)} batches")
+        logger.info(f"  Val:   {len(val_ds)} samples")
 
     # ── Model ─────────────────────────────────────────────────
     if accelerator.is_main_process:
@@ -565,8 +569,8 @@ def main(cfg):
         )
 
     # ── Accelerator prepare ───────────────────────────────────
-    model, optimizer, train_loader, val_loader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_loader, val_loader, lr_scheduler
+    model, optimizer, train_loader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_loader, lr_scheduler
     )
 
     # ── W&B ───────────────────────────────────────────────────
@@ -677,10 +681,12 @@ def main(cfg):
                 metrics = {"train_loss": loss_val, "learning_rate": lr_now, "step": completed_steps}
 
             if do_eval:
-                val_loss = _eval_val_loss(model, val_loader, processor, accelerator,
-                                           max_batches=cfg.trainer.get("val_max_batches", 50))
-                cot_samples = _generate_cot_samples(model, val_loader, processor, accelerator,
-                                                     num_samples=4)
+                val_loss = _eval_val_loss(model, val_ds, processor, accelerator,
+                                           max_batches=cfg.trainer.get("val_max_batches", 50),
+                                           batch_size=cfg.trainer.per_device_batch_size)
+                cot_samples = _generate_cot_samples(model, val_ds, processor, accelerator,
+                                                     num_samples=4,
+                                                     batch_size=cfg.trainer.per_device_batch_size)
                 if do_log:
                     log_msg += f"  val_loss={val_loss:.4f}"
                 else:
