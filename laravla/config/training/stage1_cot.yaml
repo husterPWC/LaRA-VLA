@@ -1,0 +1,87 @@
+# ============================================================================
+# Stage I-A: Explicit Transition-CoT SFT
+# ============================================================================
+# Warm-up phase: trains Qwen3-VL to explicitly generate cot_text_transition.
+# This is a standalone CoT SFT — does NOT use Qwen_GR00T latent-forward,
+# action head, img_next loss, or mask encoder.
+#
+# The trained VLM weights will be bridged back to Qwen_GR00T in Stage I-B.
+#
+# Roadmap:
+#   Stage I-A (this):    Explicit Transition-CoT SFT (standalone Qwen3-VL)
+#   Stage I-B (bridge):  Load weights → Qwen_GR00T, verify forward
+#   Stage II:            Mask encoder + future/goal mask loss + relation loss
+#   Stage III:           Transition tokens → action head, latent reasoning
+#
+# Usage:
+#   # Single GPU sanity
+#   python scripts/train_stage1_cot.py --config laravla/config/training/stage1_cot.yaml
+#
+#   # Multi-GPU (server)
+#   accelerate launch --num_processes=8 scripts/train_stage1_cot.py \
+#       --config laravla/config/training/stage1_cot.yaml
+#
+#   # With overrides
+#   python scripts/train_stage1_cot.py --config laravla/config/training/stage1_cot.yaml \
+#       --trainer.max_train_steps=500 --trainer.per_device_batch_size=4
+# ============================================================================
+
+run_id: "stage1a_cot_libero_all"
+run_root_dir: "results/Stage1A_CoT"
+seed: 42
+wandb_project: "lara_vla_stage1_cot"
+wandb_entity: ""
+
+data:
+  spatial_root: "output/spatial_lara_libero"
+  index_path: "output/spatial_lara_libero_no_noops/spatial_lara_libero_index_cot_transition_all.jsonl"
+  cot_root: "datasets/lovejuly/libero_lerobot_all"
+  alignment_path: "output/spatial_lara_libero/cot_spatial_alignment.json"
+  enable_dynamic_mask: true
+  cache_size: 16
+  future_k: 8
+  # Subset for quick testing (set to 0 to use full dataset)
+  max_samples: 0
+
+framework:
+  pretrained_checkpoint: "models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt"
+  base_vlm: "StarVLA/Qwen3-VL-4B-Instruct-Action"
+  model_max_length: 2048
+  attn_implementation: "sdpa"
+  # Freeze: train only last N LLM layers + lm_head
+  freeze:
+    num_trainable_llm_layers: 2
+    train_lm_head: true
+    train_visual: false
+
+trainer:
+  per_device_batch_size: 2
+  gradient_accumulation_steps: 4
+  max_train_steps: 50000
+  seed: 42
+  gradient_clipping: 1.0
+  logging_frequency: 10
+  save_interval: 5000
+  eval_interval: 2000
+  val_samples_per_suite: 500   # val samples per suite (stratified split)
+  val_max_batches: 50          # max batches for val loss computation
+  warmup_ratio: 0.1
+  num_warmup_steps: 1000
+  learning_rate: 1.0e-5
+  lr_scheduler_type: "cosine_with_min_lr"
+  min_lr: 1.0e-7
+  optimizer:
+    name: "AdamW"
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 1.0e-8
+  enable_mixed_precision: true
+  mixed_precision_dtype: "bfloat16"
+  num_workers: 2
+
+# VLM prompt template (applied during training input construction)
+vlm_prompt:
+  user_template: |
+    You are controlling a robot. Given the image and instruction, generate the reasoning chain.
+    Instruction: {instruction}
+  # The assistant response is cot_text_transition
