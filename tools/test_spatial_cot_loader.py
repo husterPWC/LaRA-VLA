@@ -3,7 +3,7 @@
 Phase 5B: SpatialCoTDataset batch sanity check.
 Verifies merged index + Dataset output chain: RGB, mask, CoT, relation, action.
 """
-import json, sys, time
+import json, os, sys, time
 from collections import Counter
 from pathlib import Path
 import numpy as np
