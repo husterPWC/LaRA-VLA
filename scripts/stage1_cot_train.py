@@ -112,7 +112,6 @@ def main():
     print(f"Trainable params: {trainable / 1e6:.1f}M (last 2 layers + lm_head)")
 
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-6)
-    scaler = torch.cuda.amp.GradScaler()
 
     # ── Training sanity ────────────────────────────────────────
     max_steps = args.max_steps
@@ -172,20 +171,30 @@ def main():
         labels[labels == processor.tokenizer.pad_token_id] = -100
         labels = labels.to(model.device)
 
-        # Forward + CoT loss (with grad scaler for H100 stability)
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            outputs = model(**inputs, labels=labels)
+        # Forward + CoT loss
+        outputs = model(**inputs, labels=labels)
         loss = outputs.loss
 
         if loss is None or torch.isnan(loss):
-            print(f"  Step {step}: loss NaN, skipping")
+            print(f"  Step {step}: loss NaN, skipping step")
+            optimizer.zero_grad()
             continue
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
+        loss.backward()
+
+        # Check for NaN gradients, skip if found
+        grad_nan = False
+        for p in model.parameters():
+            if p.grad is not None and torch.isnan(p.grad).any():
+                grad_nan = True
+                break
+        if grad_nan:
+            print(f"  Step {step}: grad NaN, skipping step")
+            optimizer.zero_grad()
+            continue
+
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
         optimizer.zero_grad()
 
         losses.append(loss.item())
