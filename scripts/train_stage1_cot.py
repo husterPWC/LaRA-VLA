@@ -158,11 +158,14 @@ VLM_USER_TEMPLATE = (
 def build_training_inputs(processor, images_np, instructions, cot_texts):
     """Build input_ids + aligned labels for CoT training.
 
-    Strategy:
-    1. Build messages [user(image+instruction), assistant(cot_text)]
-    2. Apply chat template → input_ids
-    3. Tokenize only the assistant CoT text separately
-    4. Align labels: prepend -100 for user+image portion, keep CoT token IDs
+    Strategy (per-sample to ensure exact label alignment):
+    1. Tokenize user-only message with add_generation_prompt=True → user_prompt
+       This gives the exact prefix of the full conversation, ending right
+       before the assistant content (CoT text).
+    2. Tokenize full conversation (user + assistant) → full_input
+    3. Labels: copy full_input_ids, mask positions 0..user_prompt_len as -100.
+       This keeps only the assistant tokens (including header + CoT + EOS)
+       as supervision targets.
 
     Args:
         processor: HuggingFace AutoProcessor
@@ -176,54 +179,96 @@ def build_training_inputs(processor, images_np, instructions, cot_texts):
     B = len(instructions)
     images_pil = [numpy_to_pil(img) for img in images_np]
 
-    # Build messages: one per sample, user + assistant
-    messages = []
-    for i in range(B):
-        msg = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": images_pil[i]},
-                    {"type": "text", "text": VLM_USER_TEMPLATE.format(instruction=instructions[i])},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": cot_texts[i]}],
-            },
-        ]
-        messages.append(msg)
+    all_input_ids = []
+    all_labels = []
+    all_attn_mask = []
 
-    # Apply chat template → full input_ids
-    # Use left padding so CoT text is right-aligned (consistent with Qwen interface)
+    for i in range(B):
+        inst = instructions[i]
+        cot = cot_texts[i]
+        img = images_pil[i]
+
+        # User-only text (ends with assistant header due to add_generation_prompt=True)
+        user_msg = [{"role": "user", "content": [
+            {"type": "image", "image": img},
+            {"type": "text", "text": VLM_USER_TEMPLATE.format(instruction=inst)},
+        ]}]
+        user_text = processor.apply_chat_template(
+            [user_msg], tokenize=False, add_generation_prompt=True
+        )[0]
+
+        # Full conversation text (user + assistant, no generation prompt)
+        full_msg = [
+            {"role": "user", "content": [
+                {"type": "image", "image": img},
+                {"type": "text", "text": VLM_USER_TEMPLATE.format(instruction=inst)},
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": cot}]},
+        ]
+        full_text = processor.apply_chat_template(
+            [full_msg], tokenize=False, add_generation_prompt=False
+        )[0]
+
+        # Tokenize both
+        user_enc = processor(text=[user_text], images=[img], return_tensors="pt")
+        full_enc = processor(text=[full_text], images=[img], return_tensors="pt")
+
+        user_len = user_enc["input_ids"].shape[1]  # prompt + assistant header
+        full_ids = full_enc["input_ids"][0]         # full conversation
+        full_len = full_ids.shape[0]
+
+        # Labels: mask user portion (0..user_len-1), keep assistant tokens
+        labels_i = full_ids.clone()
+        labels_i[:user_len] = -100
+        # Also mask padding if any
+        labels_i[labels_i == processor.tokenizer.pad_token_id] = -100
+
+        all_input_ids.append(full_ids)
+        all_labels.append(labels_i)
+        all_attn_mask.append(torch.ones(full_len, dtype=torch.long))
+
+    # Left-pad to batch max length
+    max_len = max(ids.shape[0] for ids in all_input_ids)
+    pad_id = processor.tokenizer.pad_token_id
+
+    input_ids_batch = []
+    labels_batch = []
+    attn_batch = []
+    for ids, labs, mask in zip(all_input_ids, all_labels, all_attn_mask):
+        pad_len = max_len - ids.shape[0]
+        if pad_len > 0:
+            input_ids_batch.append(torch.cat([torch.full((pad_len,), pad_id, dtype=ids.dtype), ids]))
+            labels_batch.append(torch.cat([torch.full((pad_len,), -100, dtype=labs.dtype), labs]))
+            attn_batch.append(torch.cat([torch.zeros(pad_len, dtype=mask.dtype), mask]))
+        else:
+            input_ids_batch.append(ids)
+            labels_batch.append(labs)
+            attn_batch.append(mask)
+
+    # Process images separately for pixel_values and image_grid_thw
     processor.tokenizer.padding_side = "left"
-    inputs = processor.apply_chat_template(
-        messages, tokenize=True, padding=True, return_tensors="pt",
+    # Build batch messages for image processing only
+    batch_messages = []
+    for i in range(B):
+        batch_messages.append([
+            {"role": "user", "content": [
+                {"type": "image", "image": images_pil[i]},
+                {"type": "text", "text": VLM_USER_TEMPLATE.format(instruction=instructions[i])},
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": cot_texts[i]}]},
+        ])
+    img_inputs = processor.apply_chat_template(
+        batch_messages, tokenize=True, padding=True, return_tensors="pt",
         add_generation_prompt=False, return_dict=True,
     )
 
-    # Tokenize ONLY the CoT text (assistant response) for labels
-    cot_inputs = processor.tokenizer(cot_texts, return_tensors="pt", padding=True)
-    labels_raw = cot_inputs["input_ids"]  # [B, L_cot]
-
-    L_in = inputs["input_ids"].shape[1]
-    L_cot = labels_raw.shape[1]
-
-    if L_cot >= L_in:
-        # CoT is longer than full input: truncate CoT from left
-        labels = labels_raw[:, -L_in:]
-    else:
-        # CoT is shorter: prepend -100 for user+image+header portion
-        labels = torch.cat([
-            torch.full((B, L_in - L_cot), -100, dtype=labels_raw.dtype),
-            labels_raw,
-        ], dim=1)
-
-    # Mask padding tokens
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-
-    inputs["labels"] = labels
-    return inputs
+    return {
+        "input_ids": torch.stack(input_ids_batch),
+        "attention_mask": torch.stack(attn_batch),
+        "labels": torch.stack(labels_batch),
+        "pixel_values": img_inputs["pixel_values"],
+        "image_grid_thw": img_inputs["image_grid_thw"],
+    }
 
 
 # ==================================================================
