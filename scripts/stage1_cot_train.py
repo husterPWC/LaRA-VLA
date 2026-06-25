@@ -91,7 +91,7 @@ def main():
     processor = AutoProcessor.from_pretrained(base_vlm_path, trust_remote_code=True)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         base_vlm_path, trust_remote_code=True,
-        torch_dtype=torch.bfloat16, device_map="auto"
+        torch_dtype=torch.float16, device_map="auto"
     )
     model.train()
     model.gradient_checkpointing_enable()
@@ -111,7 +111,7 @@ def main():
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable params: {trainable / 1e6:.1f}M (last 2 layers + lm_head)")
 
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-5)
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-6)
 
     # ── Training sanity ────────────────────────────────────────
     max_steps = args.max_steps
