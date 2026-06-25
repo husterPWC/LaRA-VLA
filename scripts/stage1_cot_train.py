@@ -91,7 +91,7 @@ def main():
     processor = AutoProcessor.from_pretrained(base_vlm_path, trust_remote_code=True)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         base_vlm_path, trust_remote_code=True,
-        torch_dtype=torch.float16, device_map="auto"
+        torch_dtype=torch.bfloat16, device_map="auto"
     )
     model.train()
     model.gradient_checkpointing_enable()
@@ -112,6 +112,7 @@ def main():
     print(f"Trainable params: {trainable / 1e6:.1f}M (last 2 layers + lm_head)")
 
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-6)
+    scaler = torch.cuda.amp.GradScaler()
 
     # ── Training sanity ────────────────────────────────────────
     max_steps = args.max_steps
@@ -171,24 +172,20 @@ def main():
         labels[labels == processor.tokenizer.pad_token_id] = -100
         labels = labels.to(model.device)
 
-        # Forward + CoT loss
-        with torch.autograd.set_detect_anomaly(True):
+        # Forward + CoT loss (with grad scaler for H100 stability)
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             outputs = model(**inputs, labels=labels)
         loss = outputs.loss
 
         if loss is None or torch.isnan(loss):
-            # Debug: check logits for NaN
-            if hasattr(outputs, 'logits') and outputs.logits is not None:
-                has_nan = torch.isnan(outputs.logits).any().item()
-                print(f"  Step {step}: loss NaN, logits NaN={has_nan}, max_logit={outputs.logits.max().item():.2f}")
-            else:
-                print(f"  Step {step}: loss NaN, no logits")
-            # Don't skip on NaN — let it crash with traceback to see origin
+            print(f"  Step {step}: loss NaN, skipping")
             continue
 
-        loss.backward()
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad()
 
         losses.append(loss.item())
