@@ -153,22 +153,18 @@ def main():
         inputs = processor(text=texts, images=images_pil, return_tensors="pt", padding=True)
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        # Labels: only supervise assistant CoT part
-        prompt_texts = []
-        for i in range(len(batch['instruction'])):
-            img_pil = images_pil[i]
-            prompt_msgs = [{"role": "user", "content": [
-                {"type": "image", "image": img_pil},
-                {"type": "text", "text": f"Instruction: {batch['instruction'][i]}"},
-            ]}]
-            prompt_texts.append(processor.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True))
-        prompt_inputs = processor(text=prompt_texts, images=images_pil, return_tensors="pt", padding=True)
-        prompt_lens = prompt_inputs["attention_mask"].sum(dim=1)  # per-sample actual length
-
-        labels = inputs["input_ids"].clone()
-        for i, plen in enumerate(prompt_lens):
-            labels[i, :plen] = -100  # mask user prompt per sample
+        # Labels: tokenize ONLY assistant CoT, pad to match, mask user prompt
+        cot_only = [batch['cot_text_transition'][i] for i in range(len(batch['instruction']))]
+        cot_inputs = processor(text=cot_only, return_tensors="pt", padding=True)
+        labels = cot_inputs["input_ids"].clone()
+        # Pad labels to match input length (prepend -100 for user+image tokens)
+        pad_len = inputs["input_ids"].shape[1] - labels.shape[1]
+        labels = torch.cat([
+            torch.full((labels.shape[0], pad_len), -100, dtype=labels.dtype),
+            labels,
+        ], dim=1)
         labels[labels == processor.tokenizer.pad_token_id] = -100
+        labels = labels.to(model.device)
 
         # Forward + CoT loss
         outputs = model(**inputs, labels=labels)
