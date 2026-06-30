@@ -330,19 +330,11 @@ class _QWen3_VL_Interface(nn.Module):
     ):
         """
         Clean encode-only path: image + instruction → VLM hidden states.
+        Calls self.model (HF Qwen3VLForConditionalGeneration) DIRECTLY.
+        Does NOT go through QWen3 wrapper forward() or forward_latent().
+
         No labels, no solutions, no action_tokens, no @ delimiter,
         no thinking tokens, no instruction masking.
-
-        Used by P1 (latent_transition) and P2 (transition_action) to get
-        frozen Qwen-VL features without triggering CoT/latent-reasoning logic.
-
-        Args:
-            images: List[List[PIL]] per-sample image lists
-            instructions: List[str] per-sample instruction strings
-            output_hidden_states: return hidden_states[-1]
-
-        Returns:
-            CausalLMOutputWithPast with .hidden_states
         """
         # Build clean user-only messages — no assistant, no solutions
         messages = []
@@ -359,11 +351,14 @@ class _QWen3_VL_Interface(nn.Module):
         )
         batch_inputs = batch_inputs.to(self.model.device)
 
+        # Direct call to HF model — NOT self(), NOT self.forward()
         with torch.autocast("cuda", dtype=torch.bfloat16):
             outputs = self.model(
                 **batch_inputs,
+                labels=None,
                 output_hidden_states=output_hidden_states,
                 return_dict=True,
+                use_cache=False,
             )
         return outputs
 
