@@ -141,7 +141,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             for param in self.qwen_vl_interface.parameters():
                 param.requires_grad = False
         else:
-            print(f"[Training Stage] full mode - All parameters trainable")
+            pass  # training stage may be overridden by training script
         
 
     def forward(
