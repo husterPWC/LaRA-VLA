@@ -125,11 +125,14 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.transition_action_adapter = None
             self.transition_loss_weights = {}
 
-        # Training stage control: "reasoning_only", "action_only", or "full"
+        # Training stage control
         self.training_stage = config.framework.get("training_stage", "full")
 
-        # Apply parameter freezing based on training stage
-        if self.training_stage == "reasoning_only":
+        # Log actual stage
+        stage = self.training_stage
+        if stage in ("latent_transition", "transition_action"):
+            print(f"[Training Stage] {stage} — VLM frozen, Action frozen, Trainable spatial_transition only")
+        elif stage == "reasoning_only":
             print(f"[Training Stage] reasoning_only mode - Freezing action_model parameters")
             for param in self.action_model.parameters():
                 param.requires_grad = False

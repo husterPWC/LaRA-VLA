@@ -47,6 +47,8 @@ def main():
     parser.add_argument("--eval-batches", type=int, default=50)
     parser.add_argument("--output-dir", type=str, default=str(_REPO / "results/P1_latent_transition"))
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--val-split", type=float, default=0.02,
+                        help="Fraction of data held out for validation")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -131,10 +133,29 @@ def main():
         optimizer, T_max=args.max_steps, eta_min=args.lr * 0.01
     )
 
+    # ── Val split ───────────────────────────────────────────
+    # Use fixed indices for reproducibility
+    total_batches = len(loader)
+    val_batches = max(1, int(total_batches * args.val_split))
+    all_indices = list(range(total_batches))
+    rng = np.random.RandomState(42)
+    rng.shuffle(all_indices)
+    val_indices = set(all_indices[:val_batches])
+    print(f"  Val batches: {val_batches}/{total_batches}")
+
+    def dice_coef(pred_logits, target, eps=1e-6):
+        """Compute Dice coefficient for binary masks."""
+        pred = (torch.sigmoid(pred_logits) > 0.5).float()
+        if target.dim() == 2: target = target.unsqueeze(1)
+        intersection = (pred * target).sum(dim=(1,2,3))
+        union = pred.sum(dim=(1,2,3)) + target.sum(dim=(1,2,3))
+        return ((2.0 * intersection + eps) / (union + eps)).mean().item()
+
     # ── Training loop ────────────────────────────────────────
     data_iter = iter(loader)
     losses_history = {"total": [], "future_mask": [], "goal_mask": [], "relation": []}
     best_loss = float("inf")
+    batch_idx = 0
     t0 = time.time()
 
     for step in range(args.max_steps):
@@ -196,6 +217,10 @@ def main():
         if (step + 1) % args.eval_interval == 0:
             vla.eval()
             eval_losses = {"total": [], "future": [], "goal": [], "relation": []}
+            eval_dice_future = []
+            eval_dice_goal = []
+            eval_rel_correct = 0
+            eval_rel_total = 0
             eval_iter = iter(loader)
             with torch.no_grad():
                 for _ in range(args.eval_batches):
@@ -211,12 +236,50 @@ def main():
                         eval_losses["goal"].append(eout["goal_mask_loss"].item())
                     if "relation_loss" in eout:
                         eval_losses["relation"].append(eout["relation_loss"].item())
+                    # Dice
+                    if "transition_tokens" in eout:
+                        tt = eout["transition_tokens"]
+                        with torch.no_grad():
+                            fl = vla.future_mask_decoder(tt)
+                            gl = vla.goal_mask_decoder(tt)
+                            rl = vla.relation_head(tt)
+                        # GT from batch
+                        fm = torch.from_numpy(
+                            np.stack([ex.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32)) for ex in eb])
+                        ).to(fl.device).float()
+                        gm = torch.from_numpy(
+                            np.stack([ex.get("goal_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32)) for ex in eb])
+                        ).to(gl.device).float()
+                        fm56 = F.interpolate(fm.unsqueeze(1), size=(56,56), mode='nearest').squeeze(1)
+                        gm56 = F.interpolate(gm.unsqueeze(1), size=(56,56), mode='nearest').squeeze(1)
+                        eval_dice_future.append(dice_coef(fl, fm56))
+                        eval_dice_goal.append(dice_coef(gl, gm56))
+                        # Relation accuracy
+                        rel_gt = torch.tensor([ex.get("relation_label_id", -1) for ex in eb], dtype=torch.long)
+                        rel_pred = rl.argmax(dim=1)
+                        valid = (rel_gt >= 0) & (rel_gt < rl.shape[1])
+                        eval_rel_correct += (rel_pred[valid] == rel_gt[valid]).sum().item()
+                        eval_rel_total += valid.sum().item()
 
             avg_eval = np.mean(eval_losses["total"]) if eval_losses["total"] else float("nan")
+            avg_dice_f = np.mean(eval_dice_future) if eval_dice_future else 0
+            avg_dice_g = np.mean(eval_dice_goal) if eval_dice_goal else 0
+            rel_acc = eval_rel_correct / max(eval_rel_total, 1)
             print(f"  📊 Eval {step+1}: total={avg_eval:.4f}  "
-                  f"future={np.mean(eval_losses['future']):.4f}  "
-                  f"goal={np.mean(eval_losses['goal']):.4f}  "
-                  f"rel={np.mean(eval_losses['relation']):.4f}")
+                  f"future={np.mean(eval_losses['future']):.4f}(Dice:{avg_dice_f:.3f})  "
+                  f"goal={np.mean(eval_losses['goal']):.4f}(Dice:{avg_dice_g:.3f})  "
+                  f"rel={np.mean(eval_losses['relation']):.4f}(Acc:{rel_acc:.3f})")
+
+            # Log to file
+            with open(output_dir / "metrics.jsonl", "a") as f:
+                f.write(json.dumps({
+                    "step": step + 1,
+                    "train_total": losses_history["total"][-1] if losses_history["total"] else None,
+                    "val_total": float(avg_eval),
+                    "val_future_dice": float(avg_dice_f),
+                    "val_goal_dice": float(avg_dice_g),
+                    "val_relation_acc": float(rel_acc),
+                }) + "\n")
 
             if avg_eval < best_loss:
                 best_loss = avg_eval
