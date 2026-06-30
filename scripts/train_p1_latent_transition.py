@@ -251,16 +251,17 @@ def main():
                         # GT from batch
                         fm = torch.from_numpy(
                             np.stack([ex.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32)) for ex in eb])
-                        ).to(fl.device).float()
+                        ).float().to(fl.device)
                         gm = torch.from_numpy(
                             np.stack([ex.get("goal_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32)) for ex in eb])
-                        ).to(gl.device).float()
+                        ).float().to(gl.device)
                         fm56 = F.interpolate(fm.unsqueeze(1), size=(56,56), mode='nearest').squeeze(1)
                         gm56 = F.interpolate(gm.unsqueeze(1), size=(56,56), mode='nearest').squeeze(1)
                         eval_dice_future.append(dice_coef(fl, fm56))
                         eval_dice_goal.append(dice_coef(gl, gm56))
                         # Relation accuracy
-                        rel_gt = torch.tensor([ex.get("relation_label_id", -1) for ex in eb], dtype=torch.long)
+                        rel_gt = torch.tensor([ex.get("relation_label_id", -1) for ex in eb],
+                                             dtype=torch.long, device=rl.device)
                         rel_pred = rl.argmax(dim=1)
                         valid = (rel_gt >= 0) & (rel_gt < rl.shape[1])
                         eval_rel_correct += (rel_pred[valid] == rel_gt[valid]).sum().item()
