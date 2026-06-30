@@ -715,11 +715,19 @@ class _QWen3_VL_Interface(nn.Module):
             state_dict = pruned
         return super().load_state_dict(state_dict, strict=strict)
 
-    def build_qwenvl_inputs(self, images, instructions, solutions=None, **kwargs):
+    def build_qwenvl_inputs(self, images, instructions, solutions=None, cot_mode=False, **kwargs):
         """
         Build model inputs from raw data (images + instructions + optional solutions).
         Follow Oficial Qwen3-VL Instruct format: https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct
-        
+
+        Args:
+            images: List[List[PIL]] per-sample image lists
+            instructions: List[str] per-sample instructions
+            solutions: Optional[List[str]] per-sample assistant responses
+            cot_mode: If True, construct labels for CoT text training
+                      (mask user portion, keep assistant CoT tokens).
+                      If False (default), use action-token masking (legacy).
+
         If implicit reasoning is enabled, this method will also align thinking tokens across
         batch samples for efficient latent reasoning training.
         """
@@ -728,7 +736,11 @@ class _QWen3_VL_Interface(nn.Module):
         enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
         thinking_token_id = getattr(self, "thinking_token_id", None)
         action_tokens = kwargs.get("action_tokens", None)
-        
+
+        # If cot_mode is set, bypass latent reasoning — use standard path with CoT labels
+        if cot_mode:
+            enable_latent_reasoning = False
+
         # If implicit reasoning is enabled, we need to align thinking tokens
         if enable_latent_reasoning and thinking_token_id is not None:
             # Note: solutions parameter is not used in alignment path
@@ -768,27 +780,43 @@ class _QWen3_VL_Interface(nn.Module):
         return_tensors="pt"
         )
 
-        # if solutions, mask out the solution tokens in labels
-        if solutions is not None: #  here only for fast_tokenizer now. 
-            action_token_min = _ACTION_TOKEN_MIN # how can we know this range? --> we has other way for this, but is slower see qwenhelix branch
-            action_token_max = _ACTION_TOKEN_MAX # here only for fast_tokenizer, see laravla/model/modules/vlm/tools/add_qwen_special_tokens/README.md
-            labels = batch_inputs['input_ids'].clone()
-            # For each sequence in the batch, find the first occurrence of an action token.
-            for i in range(labels.size(0)):
-                seq = labels[i]
-                # Create a mask for tokens within the action token range.
-                mask_seq = (seq >= action_token_min) & (seq <= action_token_max)
-                nonzero_indices = torch.nonzero(mask_seq, as_tuple=False)
-                if nonzero_indices.numel() > 0:
-                    first_action_index = nonzero_indices[0].item()
-                    # Mask out all tokens before the first action token.
-                    seq[:first_action_index] = IGNORE_INDEX
-                else:
-                    # If no action token is found, mask the entire sequence.
-                    seq[:] = IGNORE_INDEX
-                    logger.warning(f"Action token not found in sample {i}. Please check if action tokens are added to tokenizer. See laravla/model/modules/vlm/tools/add_qwen_special_tokens/README.md.")
-            
-            labels[labels == self.processor.tokenizer.pad_token_id] = -100 ## mask out pad tokens as well
+        # if solutions, construct labels
+        if solutions is not None:
+            if cot_mode:
+                # CoT text training: mask user portion, keep assistant CoT tokens.
+                # Per-sample alignment to handle variable-length user prompts.
+                labels = batch_inputs['input_ids'].clone()
+                for i in range(len(images)):
+                    # Tokenize user-only message to find the assistant start position
+                    user_msg = [{"role": "user", "content": [
+                        {"type": "image", "image": img} for img in images[i]
+                    ] + [{"type": "text", "text": instructions[i]}]}]
+                    user_text = self.processor.apply_chat_template(
+                        [user_msg], tokenize=False, add_generation_prompt=True
+                    )[0]
+                    user_enc = self.processor(text=[user_text], images=images[i], return_tensors="pt")
+                    user_len = user_enc["input_ids"].shape[1]
+                    # Mask user portion (including assistant header from generation prompt)
+                    labels[i, :user_len] = IGNORE_INDEX
+                # Mask pad tokens
+                labels[labels == self.processor.tokenizer.pad_token_id] = IGNORE_INDEX
+            else:
+                # Legacy: action token masking for fast_tokenizer
+                action_token_min = _ACTION_TOKEN_MIN
+                action_token_max = _ACTION_TOKEN_MAX
+                labels = batch_inputs['input_ids'].clone()
+                for i in range(labels.size(0)):
+                    seq = labels[i]
+                    mask_seq = (seq >= action_token_min) & (seq <= action_token_max)
+                    nonzero_indices = torch.nonzero(mask_seq, as_tuple=False)
+                    if nonzero_indices.numel() > 0:
+                        first_action_index = nonzero_indices[0].item()
+                        seq[:first_action_index] = IGNORE_INDEX
+                    else:
+                        seq[:] = IGNORE_INDEX
+                        logger.warning(f"Action token not found in sample {i}. Please check if action tokens are added to tokenizer. See laravla/model/modules/vlm/tools/add_qwen_special_tokens/README.md.")
+                labels[labels == self.processor.tokenizer.pad_token_id] = -100
+
             # Mask img_next tokens out of VLM loss
             if getattr(self, "img_next_token_id", None) is not None:
                 labels[labels == self.img_next_token_id] = IGNORE_INDEX

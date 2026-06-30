@@ -68,7 +68,63 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         self.future_action_window_size = config.framework.action_model.future_action_window_size
         self.past_action_window_size = config.framework.action_model.past_action_window_size
         self.chunk_len = self.past_action_window_size + 1 + self.future_action_window_size
-        
+
+        # ── Spatial Transition Modules (bottleneck) ──────────
+        trans_cfg = config.framework.get("mask_conditioned_transition", {}) if hasattr(config.framework, "get") else {}
+        self.transition_enabled = trans_cfg.get("enable", False)
+        if self.transition_enabled:
+            from laravla.model.modules.spatial_transition import (
+                VLMProjector, MaskTokenEncoder, MaskConditionedTransitionModule,
+                MaskDecoder, RelationHead, TransitionToActionProjector
+            )
+            vlm_dim = self.qwen_vl_interface.model.config.hidden_size  # 2560
+            self.transition_dim = trans_cfg.get("transition_dim", 512)
+            num_mask_tokens = trans_cfg.get("num_mask_tokens", 8)
+            num_transition_tokens = trans_cfg.get("num_transition_tokens", 6)
+            num_relation_labels = trans_cfg.get("num_relation_labels", 6)
+
+            self.vlm_projector = VLMProjector(vlm_dim=vlm_dim, transition_dim=self.transition_dim)
+            self.mask_token_encoder = MaskTokenEncoder(
+                in_channels=1, transition_dim=self.transition_dim, num_tokens=num_mask_tokens
+            )
+            self.transition_module = MaskConditionedTransitionModule(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens
+            )
+            self.future_mask_decoder = MaskDecoder(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                output_res=trans_cfg.get("mask_res", 56)
+            )
+            self.goal_mask_decoder = MaskDecoder(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                output_res=trans_cfg.get("mask_res", 56)
+            )
+            self.relation_head = RelationHead(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                num_classes=num_relation_labels
+            )
+            # P2: project transition tokens back to VLM dim for action head
+            self.transition_to_action = TransitionToActionProjector(
+                transition_dim=self.transition_dim, vlm_dim=vlm_dim
+            )
+            from laravla.model.modules.spatial_transition import GatedTransitionActionAdapter
+            self.transition_action_adapter = GatedTransitionActionAdapter(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                vlm_dim=vlm_dim
+            )
+            self.transition_loss_weights = trans_cfg.get("loss_weights", {
+                "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05
+            })
+        else:
+            self.vlm_projector = None
+            self.mask_token_encoder = None
+            self.transition_module = None
+            self.future_mask_decoder = None
+            self.goal_mask_decoder = None
+            self.relation_head = None
+            self.transition_to_action = None
+            self.transition_action_adapter = None
+            self.transition_loss_weights = {}
+
         # Training stage control: "reasoning_only", "action_only", or "full"
         self.training_stage = config.framework.get("training_stage", "full")
 
@@ -193,6 +249,189 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 result["total_loss"] = vlm_loss + img_next_loss_weight * img_next_loss
             else:
                 result["total_loss"] = vlm_loss
+            return result
+
+        elif self.training_stage == "explicit_transition_cot":
+            # Stage I: Explicit Transition-CoT text supervision.
+            # Uses cot_text_transition as assistant labels; standard VLM forward
+            # (NOT latent reasoning). Does NOT use action head or img_next.
+            cot_texts = [example.get("cot_text_transition", "") for example in examples]
+            # Build inputs with CoT labels (user portion masked, assistant = labels)
+            cot_qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+                images=batch_images,
+                instructions=instructions,
+                solutions=cot_texts if any(cot_texts) else None,
+                cot_mode=True,
+            )
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                cot_outputs = self.qwen_vl_interface(
+                    **cot_qwen_inputs,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                    return_dict=True,
+                )
+            cot_loss = cot_outputs.loss
+            if cot_loss is None:
+                raise ValueError(
+                    "training_stage='explicit_transition_cot' requires CoT loss, "
+                    "but cot_loss is None. Check that cot_text_transition is provided "
+                    "in the batch and cot_mode=True produces valid labels."
+                )
+            result["vlm_loss"] = cot_loss
+            result["total_loss"] = cot_loss
+            return result
+
+        elif self.training_stage == "latent_transition":
+            # Stage II: Mask-conditioned latent transition reasoning.
+            # Frozen: Qwen-VL + action_model. Train: transition modules only.
+            if not self.transition_enabled:
+                raise ValueError("training_stage='latent_transition' requires "
+                                 "mask_conditioned_transition.enable=true in config.")
+            from laravla.model.modules.spatial_transition import transition_total_loss
+            import torch.nn.functional as F
+
+            # Extract current masks from batch
+            cur_masks = torch.from_numpy(
+                np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
+            ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()  # [B,1,H,W]
+
+            future_masks = torch.from_numpy(
+                np.stack([ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+
+            goal_masks = torch.from_numpy(
+                np.stack([ex.get("goal_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+
+            rel_ids = torch.tensor(
+                [ex.get("relation_label_id", -1) for ex in examples],
+                dtype=torch.long, device=self.qwen_vl_interface.model.device
+            )
+
+            # Frozen VLM forward → hidden states
+            with torch.no_grad():
+                qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+                    images=batch_images, instructions=instructions
+                )
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    qwen_out = self.qwen_vl_interface(**qwen_inputs, output_hidden_states=True)
+                vlm_hidden = qwen_out.hidden_states[-1].float()  # [B, L, 2560]
+
+            # Project VLM hidden to bottleneck
+            vlm_proj = self.vlm_projector(vlm_hidden)  # [B, L, transition_dim]
+
+            # Mask → mask_tokens (in bottleneck space)
+            mask_tokens = self.mask_token_encoder(cur_masks)  # [B, K, transition_dim]
+
+            # Transition module (bottleneck)
+            transition_tokens = self.transition_module(vlm_proj, mask_tokens)
+
+            # Decode
+            future_logits = self.future_mask_decoder(transition_tokens)
+            goal_logits = self.goal_mask_decoder(transition_tokens)
+            rel_logits = self.relation_head(transition_tokens)
+
+            # Resize GT masks to match decoder output
+            R = future_logits.shape[-1]
+            future_gt = F.interpolate(
+                future_masks.unsqueeze(1), size=(R, R), mode='nearest'
+            ).squeeze(1)
+            goal_gt = F.interpolate(
+                goal_masks.unsqueeze(1), size=(R, R), mode='nearest'
+            ).squeeze(1)
+
+            # Compute losses
+            w = self.transition_loss_weights
+            losses = transition_total_loss(
+                future_logits=future_logits, future_target=future_gt,
+                goal_logits=goal_logits, goal_target=goal_gt,
+                relation_logits=rel_logits, relation_target=rel_ids,
+                w_future=w.get("future_mask", 0.05),
+                w_goal=w.get("goal_mask", 0.10),
+                w_relation=w.get("relation", 0.05),
+            )
+
+            losses["transition_tokens"] = transition_tokens
+            return losses
+
+        elif self.training_stage == "transition_action":
+            # Stage III: Gated transition → action generation.
+            # Frozen: Qwen-VL. Train: transition modules + action adapter + action model.
+            if not self.transition_enabled:
+                raise ValueError("training_stage='transition_action' requires "
+                                 "mask_conditioned_transition.enable=true.")
+            from laravla.model.modules.spatial_transition import transition_total_loss
+            import torch.nn.functional as F
+
+            # ── Transition branch (same as latent_transition) ──
+            cur_masks = torch.from_numpy(
+                np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
+            ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()
+            future_masks = torch.from_numpy(
+                np.stack([ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+            goal_masks = torch.from_numpy(
+                np.stack([ex.get("goal_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+            rel_ids = torch.tensor(
+                [ex.get("relation_label_id", -1) for ex in examples],
+                dtype=torch.long, device=self.qwen_vl_interface.model.device)
+
+            with torch.no_grad():
+                qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+                    images=batch_images, instructions=instructions)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    qwen_out = self.qwen_vl_interface(**qwen_inputs, output_hidden_states=True)
+                vlm_hidden = qwen_out.hidden_states[-1].float()
+
+            vlm_proj = self.vlm_projector(vlm_hidden)
+            mask_tokens = self.mask_token_encoder(cur_masks)
+            transition_tokens = self.transition_module(vlm_proj, mask_tokens)
+
+            # ── Transition losses ─────────────────────────────
+            future_logits = self.future_mask_decoder(transition_tokens)
+            goal_logits = self.goal_mask_decoder(transition_tokens)
+            rel_logits = self.relation_head(transition_tokens)
+            R = future_logits.shape[-1]
+            future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+            goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+            w = self.transition_loss_weights
+            trans_losses = transition_total_loss(
+                future_logits=future_logits, future_target=future_gt,
+                goal_logits=goal_logits, goal_target=goal_gt,
+                relation_logits=rel_logits, relation_target=rel_ids,
+                w_future=w.get("future_mask",0.05), w_goal=w.get("goal_mask",0.10),
+                w_relation=w.get("relation",0.05))
+
+            # ── Gated adapter: inject transition into action context ──
+            conditioned_vl = self.transition_action_adapter(vlm_hidden, transition_tokens)
+
+            # ── Action loss ──────────────────────────────────
+            with torch.autocast("cuda", dtype=torch.float32):
+                actions_t = torch.tensor(np.array(actions), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
+                actions_target = actions_t[:, -(self.future_action_window_size+1):, :]
+                repeated_diffusion_steps = getattr(self.config.trainer, "repeated_diffusion_steps", 4) if self.config and hasattr(self.config, "trainer") else 4
+                actions_target_rep = actions_target.repeat(repeated_diffusion_steps, 1, 1)
+                conditioned_rep = conditioned_vl.repeat(repeated_diffusion_steps, 1, 1)
+                state_rep = None
+                if state is not None:
+                    st = torch.tensor(np.array(state), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
+                    if st.ndim == 2: st = st.unsqueeze(1)
+                    state_rep = st.repeat(repeated_diffusion_steps, 1, 1)
+                action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
+
+            result = {
+                "action_loss": action_loss,
+                "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
+                "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),
+                "relation_loss": trans_losses.get("relation_loss", torch.tensor(0.0)),
+                "total_loss": action_loss + trans_losses["total_loss"],
+                "transition_tokens": transition_tokens,
+            }
             return result
 
         elif self.training_stage == "action_only":

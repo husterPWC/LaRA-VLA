@@ -59,5 +59,18 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
     elif dataset_py == "vlm_datasets":
         vlm_data_module = make_vlm_dataloader(cfg)
         vlm_train_dataloader = vlm_data_module["train_dataloader"]
-        
+
         return vlm_train_dataloader
+    elif dataset_py == "spatial_cot_libero":
+        from laravla.dataloader.spatial_cot_libero import get_spatial_cot_dataset, collate_fn
+        vla_dataset_cfg = cfg.datasets.vla_data
+        vla_dataset = get_spatial_cot_dataset(vla_dataset_cfg)
+        vla_train_dataloader = DataLoader(
+            vla_dataset,
+            batch_size=vla_dataset_cfg.per_device_batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=vla_dataset_cfg.get("num_workers", 2) if hasattr(vla_dataset_cfg, "get") else 2,
+            pin_memory=True,
+        )
+        return vla_train_dataloader
