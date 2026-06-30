@@ -322,6 +322,51 @@ class _QWen3_VL_Interface(nn.Module):
 
         return img_next_token_id
 
+    def encode_observation(
+        self,
+        images,
+        instructions,
+        output_hidden_states: bool = True,
+    ):
+        """
+        Clean encode-only path: image + instruction → VLM hidden states.
+        No labels, no solutions, no action_tokens, no @ delimiter,
+        no thinking tokens, no instruction masking.
+
+        Used by P1 (latent_transition) and P2 (transition_action) to get
+        frozen Qwen-VL features without triggering CoT/latent-reasoning logic.
+
+        Args:
+            images: List[List[PIL]] per-sample image lists
+            instructions: List[str] per-sample instruction strings
+            output_hidden_states: return hidden_states[-1]
+
+        Returns:
+            CausalLMOutputWithPast with .hidden_states
+        """
+        # Build clean user-only messages — no assistant, no solutions
+        messages = []
+        for imgs, instruction in zip(images, instructions):
+            content = [{"type": "image", "image": img} for img in imgs]
+            content.append({"type": "text", "text": instruction})
+            msg = [{"role": "user", "content": content}]
+            messages.append(msg)
+
+        self.processor.tokenizer.padding_side = "left"
+        batch_inputs = self.processor.apply_chat_template(
+            messages, tokenize=True, padding=True,
+            add_generation_prompt=False, return_dict=True, return_tensors="pt",
+        )
+        batch_inputs = batch_inputs.to(self.model.device)
+
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            outputs = self.model(
+                **batch_inputs,
+                output_hidden_states=output_hidden_states,
+                return_dict=True,
+            )
+        return outputs
+
     def forward(
         self,
         **kwargs,

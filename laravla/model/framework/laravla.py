@@ -310,13 +310,12 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 dtype=torch.long, device=self.qwen_vl_interface.model.device
             )
 
-            # Frozen VLM forward → hidden states
+            # Frozen VLM forward → hidden states (clean path, no warnings)
             with torch.no_grad():
-                qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
-                    images=batch_images, instructions=instructions
+                qwen_out = self.qwen_vl_interface.encode_observation(
+                    images=batch_images, instructions=instructions,
+                    output_hidden_states=True,
                 )
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    qwen_out = self.qwen_vl_interface(**qwen_inputs, output_hidden_states=True)
                 vlm_hidden = qwen_out.hidden_states[-1].float()  # [B, L, 2560]
 
             # Project VLM hidden to bottleneck
@@ -382,10 +381,10 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 dtype=torch.long, device=self.qwen_vl_interface.model.device)
 
             with torch.no_grad():
-                qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
-                    images=batch_images, instructions=instructions)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    qwen_out = self.qwen_vl_interface(**qwen_inputs, output_hidden_states=True)
+                qwen_out = self.qwen_vl_interface.encode_observation(
+                    images=batch_images, instructions=instructions,
+                    output_hidden_states=True,
+                )
                 vlm_hidden = qwen_out.hidden_states[-1].float()
 
             vlm_proj = self.vlm_projector(vlm_hidden)

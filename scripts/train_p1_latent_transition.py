@@ -95,7 +95,20 @@ def main():
 
     trainable_params = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     print(f"  Trainable (transition only): {trainable_params/1e6:.1f}M")
-    print(f"  VLM: frozen, Action: frozen")
+    # Breakdown
+    for name, module in [("VLMProjector", vla.vlm_projector),
+                          ("MaskTokenEncoder", vla.mask_token_encoder),
+                          ("TransitionModule", vla.transition_module),
+                          ("FutureMaskDecoder", vla.future_mask_decoder),
+                          ("GoalMaskDecoder", vla.goal_mask_decoder),
+                          ("RelationHead", vla.relation_head)]:
+        n = sum(p.numel() for p in module.parameters())
+        print(f"    {name}: {n/1e6:.2f}M")
+    # Verify frozen
+    vlm_trainable = sum(p.numel() for p in vla.qwen_vl_interface.parameters() if p.requires_grad)
+    action_trainable = sum(p.numel() for p in vla.action_model.parameters() if p.requires_grad)
+    print(f"  VLM: {'✅ frozen' if vlm_trainable==0 else '❌ HAS TRAINABLE'}")
+    print(f"  Action: {'✅ frozen' if action_trainable==0 else '❌ HAS TRAINABLE'}")
 
     # ── Optimizer ───────────────────────────────────────────
     optimizer = torch.optim.AdamW(
