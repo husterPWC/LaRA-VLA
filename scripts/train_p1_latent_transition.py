@@ -151,9 +151,10 @@ def main():
         """Compute Dice coefficient for binary masks."""
         pred = (torch.sigmoid(pred_logits) > 0.5).float()
         if target.dim() == 2: target = target.unsqueeze(1)
-        intersection = (pred * target).sum(dim=(1,2,3))
-        union = pred.sum(dim=(1,2,3)) + target.sum(dim=(1,2,3))
-        return ((2.0 * intersection + eps) / (union + eps)).mean().item()
+        elif target.dim() == 3: target = target.unsqueeze(1)
+        intersection = (pred * target).sum()
+        union = pred.sum() + target.sum()
+        return ((2.0 * intersection + eps) / (union + eps)).item()
 
     # ── Training loop ────────────────────────────────────────
     data_iter = iter(loader)
