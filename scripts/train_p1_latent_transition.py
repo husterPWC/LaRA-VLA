@@ -45,6 +45,8 @@ def main():
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--eval-interval", type=int, default=2000)
     parser.add_argument("--eval-batches", type=int, default=50)
+    parser.add_argument("--max-val-batches", type=int, default=None,
+                        help="Max val batches (default: eval-batches)")
     parser.add_argument("--output-dir", type=str, default=str(_REPO / "results/P1_latent_transition"))
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--val-split", type=float, default=0.02,
@@ -88,6 +90,7 @@ def main():
     vla.load_state_dict(torch.load(CKPT, map_location="cpu"), strict=False)
     vla = vla.to("cuda")
     vla.training_stage = "latent_transition"
+    print(f"  [Training Stage] latent_transition — VLM frozen, Action frozen, Trainable spatial_transition only")
 
     # Freeze VLM + action_model + P2 adapter (P1 only trains transition)
     for p in vla.qwen_vl_interface.parameters():
@@ -137,6 +140,7 @@ def main():
     # Use fixed indices for reproducibility
     total_batches = len(loader)
     val_batches = max(1, int(total_batches * args.val_split))
+    max_val = args.max_val_batches or args.eval_batches
     all_indices = list(range(total_batches))
     rng = np.random.RandomState(42)
     rng.shuffle(all_indices)
@@ -223,7 +227,7 @@ def main():
             eval_rel_total = 0
             eval_iter = iter(loader)
             with torch.no_grad():
-                for _ in range(args.eval_batches):
+                for _ in range(max_val):
                     try:
                         eb = next(eval_iter)
                     except StopIteration:
