@@ -86,7 +86,7 @@ def main():
     ).unsqueeze(1).to("cuda")  # [B, 1, 224, 224]
 
     encoder = MaskTokenEncoder(
-        in_channels=1, hidden_dim=HIDDEN_DIM, num_tokens=8
+        in_channels=1, transition_dim=HIDDEN_DIM, num_tokens=8
     ).to("cuda")
     mask_tokens = encoder(cur_mask)
     print(f"  Input:  {cur_mask.shape}")
@@ -99,7 +99,7 @@ def main():
     from laravla.model.modules.spatial_transition import MaskConditionedTransitionModule
 
     trans_module = MaskConditionedTransitionModule(
-        hidden_dim=HIDDEN_DIM, num_transition_tokens=6
+        transition_dim=HIDDEN_DIM, num_transition_tokens=6
     ).to("cuda")
     transition_tokens = trans_module(vlm_hidden, mask_tokens)
     print(f"  Output: {transition_tokens.shape}  (expected [B,6,{HIDDEN_DIM}])")
@@ -110,9 +110,9 @@ def main():
     print("\n[5] Testing Decoders...")
     from laravla.model.modules.spatial_transition import MaskDecoder, RelationHead
 
-    future_decoder = MaskDecoder(hidden_dim=HIDDEN_DIM, num_transition_tokens=6, output_res=56).to("cuda")
-    goal_decoder = MaskDecoder(hidden_dim=HIDDEN_DIM, num_transition_tokens=6, output_res=56).to("cuda")
-    relation_head = RelationHead(hidden_dim=HIDDEN_DIM, num_transition_tokens=6, num_classes=6).to("cuda")
+    future_decoder = MaskDecoder(transition_dim=HIDDEN_DIM, num_transition_tokens=6, output_res=56).to("cuda")
+    goal_decoder = MaskDecoder(transition_dim=HIDDEN_DIM, num_transition_tokens=6, output_res=56).to("cuda")
+    relation_head = RelationHead(transition_dim=HIDDEN_DIM, num_transition_tokens=6, num_classes=6).to("cuda")
 
     future_logits = future_decoder(transition_tokens)
     goal_logits = goal_decoder(transition_tokens)
