@@ -161,20 +161,30 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         )
         
         state = [example["state"] for example in examples] if "state" in examples[0] else None  # [B, 1, state_dim]
-        
 
-        # Step 1: QWenVL input format (tokenization and thinking token alignment if enabled)
-        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
-            images=batch_images, 
-            instructions=instructions,
-            action_tokens=action_tokens,
-        )
-        # Check if iterative implicit reasoning is enabled
-        enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
-        use_iterative_forward = (
-            enable_latent_reasoning
-            and hasattr(self.qwen_vl_interface, "forward_latent")
-        )
+        # ── Trainable param guard for transition stages ───────
+        # These stages freeze VLM; transition modules hold trainable params.
+        # Only create the full qwen_inputs (with alignment logic) for stages that need them.
+
+        # Deferred: build_qwenvl_inputs is called inside branches that need it
+        # (reasoning_only, action_only, full). New stages (explicit_transition_cot,
+        # latent_transition, transition_action) use encode_observation instead.
+
+        if self.training_stage in ("reasoning_only", "action_only", "full"):
+            qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+                images=batch_images,
+                instructions=instructions,
+                action_tokens=action_tokens,
+            )
+            enable_latent_reasoning = self.config.framework.get("enable_latent_reasoning", False)
+            use_iterative_forward = (
+                enable_latent_reasoning
+                and hasattr(self.qwen_vl_interface, "forward_latent")
+            )
+        else:
+            qwen_inputs = None
+            enable_latent_reasoning = False
+            use_iterative_forward = False
 
         if use_iterative_forward:
             # Step 2: Iterative forward with KV-Cache for implicit reasoning
@@ -189,7 +199,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             
             last_hidden = vlm_outputs['hidden_states']  # [B, L, H]
             vlm_loss = vlm_outputs.get('loss')  # May be None if no labels
-        else:
+        elif qwen_inputs is not None:
             # Step 2: Normal forward pass (no iterative reasoning)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 qwenvl_outputs = self.qwen_vl_interface(
@@ -200,20 +210,23 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 )
                 last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
                 vlm_loss = qwenvl_outputs.loss if hasattr(qwenvl_outputs, 'loss') else None
+        else:
+            last_hidden = None
+            vlm_loss = None
 
         # Step 3: Compute losses based on training stage
         result = {}
 
         img_next_loss = None
         img_next_cfg = getattr(self.config.framework, "img_next", {}) if hasattr(self.config, "framework") else {}
-        enable_img_next = img_next_cfg.get("enable", False)
+        enable_img_next = img_next_cfg.get("enable", False) and qwen_inputs is not None
         img_next_loss_weight = img_next_cfg.get("loss_weight", 0.5)
         img_next_res = img_next_cfg.get("res", 112)
         img_next_token_id = getattr(self.qwen_vl_interface, "img_next_token_id", None)
 
         use_img_next_teacher = img_next_cfg.get("use_teacher", True)
         img_next_mask_for_action = (
-            (qwen_inputs["input_ids"] == img_next_token_id) if img_next_token_id is not None else None
+            (qwen_inputs["input_ids"] == img_next_token_id) if (img_next_token_id is not None and qwen_inputs is not None) else None
         )
 
         if (
