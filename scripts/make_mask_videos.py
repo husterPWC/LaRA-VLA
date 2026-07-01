@@ -55,7 +55,7 @@ def build_video(ds, suite, task_id, demo_id):
     T = len(indices)
     out_dir = OUT_DIR / suite / f"task_{task_id:02d}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    mp4_path = out_dir / f"demo_{demo_id:06d}_mask.mp4"
+    gif_path = out_dir / f"demo_{demo_id:06d}_mask.gif"
 
     # Collect all frames into memory
     frames = []
@@ -69,9 +69,8 @@ def build_video(ds, suite, task_id, demo_id):
             print(".", end="", flush=True)
 
     print(f" encoding {len(frames)} frames...", end="", flush=True)
-    gif_path = str(mp4_path).replace('.mp4', '.gif')
-    imageio.mimsave(gif_path, frames, fps=10, loop=0)
-    size_mb = mp4_path.stat().st_size / 1024 / 1024
+    imageio.mimsave(str(gif_path), frames, fps=10, loop=0)
+    size_mb = gif_path.stat().st_size / 1024 / 1024
     print(f" ✅ {size_mb:.1f}MB")
 
 
