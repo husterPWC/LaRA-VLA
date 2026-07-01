@@ -2,6 +2,7 @@
 # Licensed under the MIT License, Version 1.0 (the "License"); 
 # Implemented by [Jinhui YE / HKUST University] in [2025].
 
+import os
 import torch
 import copy
 from typing import Optional, List, Tuple
@@ -54,11 +55,18 @@ class _QWen3_VL_Interface(nn.Module):
         cache_dir = qwenvl_config.get("cache_dir", None)
         attn_impl = qwenvl_config.get("attn_implementation", "flash_attention_2")
 
+        # DDP multi-GPU: bind to local GPU only. Single-GPU or non-distributed: use "cuda".
+        local_rank = os.environ.get("LOCAL_RANK", None)
+        if local_rank is not None:
+            device_spec = {"": f"cuda:{local_rank}"}
+        else:
+            device_spec = "cuda"
+
         model = Qwen3VLForConditionalGeneration.from_pretrained(
             model_id,
             attn_implementation=attn_impl,
             dtype=torch.bfloat16,
-            device_map="cuda",
+            device_map=device_spec,
             cache_dir=cache_dir,
         )
         processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
