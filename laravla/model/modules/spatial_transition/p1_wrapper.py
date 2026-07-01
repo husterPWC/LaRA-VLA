@@ -91,7 +91,7 @@ class P1TransitionWrapper(nn.Module):
         goal_dice = self._dice(goal_logits, goal_gt)
         rel_pred = rel_logits.argmax(dim=1)
         valid = (rel_ids >= 0) & (rel_ids < rel_logits.shape[1])
-        rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else torch.tensor(0.0)
+        rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else rel_logits.sum() * 0.0
 
         return {
             "total_loss": losses["total_loss"],

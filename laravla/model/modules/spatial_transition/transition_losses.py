@@ -67,7 +67,8 @@ def relation_loss(pred_logits, target_ids, ignore_index=-1):
     # Filter out invalid labels (e.g., -1 or out of range)
     valid_mask = (target_ids >= 0) & (target_ids < pred_logits.shape[1])
     if valid_mask.sum() == 0:
-        return torch.tensor(0.0, device=pred_logits.device, requires_grad=True)
+        # Must stay in computation graph for DDP (unused params check)
+        return pred_logits.sum() * 0.0
 
     return F.cross_entropy(
         pred_logits[valid_mask],
@@ -102,7 +103,9 @@ def transition_total_loss(
         dict with individual losses and total_loss
     """
     losses = {}
-    total = torch.tensor(0.0, device=future_logits.device if future_logits is not None else "cpu")
+    # Start from a graph-connected zero to keep DDP happy
+    first_tensor = future_logits if future_logits is not None else (goal_logits if goal_logits is not None else relation_logits)
+    total = first_tensor.sum() * 0.0 if first_tensor is not None else torch.tensor(0.0)
 
     if future_logits is not None and future_target is not None:
         L_future = mask_loss(future_logits, future_target)
