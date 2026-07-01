@@ -67,6 +67,8 @@ def main():
         gradient_accumulation_steps=1,
         mixed_precision="bf16",
     )
+    if torch.cuda.is_available():
+        torch.cuda.set_device(accelerator.local_process_index)
     rank = accelerator.process_index
     world_size = accelerator.num_processes
 
@@ -133,7 +135,6 @@ def main():
     trainable_numel = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     print(f"[Rank {accelerator.process_index}] trainable_tensors={len(trainable_names)} "
           f"trainable_params={trainable_numel/1e6:.2f}M", flush=True)
-    accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
         print("  [Training Stage] latent_transition — VLM frozen, Action frozen, Trainable spatial_transition only")
