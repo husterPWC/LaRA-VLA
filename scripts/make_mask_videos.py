@@ -69,13 +69,8 @@ def build_video(ds, suite, task_id, demo_id):
             print(".", end="", flush=True)
 
     print(f" encoding {len(frames)} frames...", end="", flush=True)
-    try:
-        imageio.mimsave(str(mp4_path), frames, fps=20)
-    except (TypeError, RuntimeError):
-        # Fallback: use pillow GIF if PyAV codec unavailable
-        gif_path = str(mp4_path).replace('.mp4', '.gif')
-        imageio.mimsave(gif_path, frames, fps=20, loop=0)
-        print(f"      (saved as GIF: {gif_path})")
+    gif_path = str(mp4_path).replace('.mp4', '.gif')
+    imageio.mimsave(gif_path, frames, fps=10, loop=0)
     size_mb = mp4_path.stat().st_size / 1024 / 1024
     print(f" ✅ {size_mb:.1f}MB")
 
