@@ -125,7 +125,8 @@ def audit_task(ds, suite, task_id, out_root):
         timeline = []
         for idx, e in entries:
             s = ds[idx]
-            sub = s.get("cot_subtask", "")
+            cot_text = s.get("cot_text_transition", "")
+            sub = cot_text.replace("Subtask: ", "").split("Reasoning:")[0].strip() if cot_text else ""
             goal_idx = s["subtask_end_idx"]
             h5 = s["hdf5_frame_idx"]
             timeline.append({

@@ -132,7 +132,9 @@ def main():
         for idx, e in entries:
             cf = e["cot_frame_idx"]
             s = ds[idx]
-            sub = s.get("cot_subtask", "")
+            # Use fixed CoT text (V3) instead of raw cot_subtask
+            cot_text = s.get("cot_text_transition", "")
+            sub = cot_text.replace("Subtask: ", "").split("Reasoning:")[0].strip() if cot_text else ""
             goal_idx = s["subtask_end_idx"]
             h5 = s["hdf5_frame_idx"]
 
