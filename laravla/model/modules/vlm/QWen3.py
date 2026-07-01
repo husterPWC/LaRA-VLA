@@ -55,20 +55,24 @@ class _QWen3_VL_Interface(nn.Module):
         cache_dir = qwenvl_config.get("cache_dir", None)
         attn_impl = qwenvl_config.get("attn_implementation", "flash_attention_2")
 
-        # DDP multi-GPU: bind to local GPU only. Single-GPU or non-distributed: use "cuda".
-        local_rank = os.environ.get("LOCAL_RANK", None)
-        if local_rank is not None:
-            device_spec = {"": f"cuda:{local_rank}"}
+        # DDP-safe: load on CPU with device_map=None, then manually move to local GPU.
+        # This avoids HuggingFace device_map dispatch hooks that break DDP parameter verification.
+        local_rank = int(os.environ.get("LOCAL_RANK", 0)) if os.environ.get("LOCAL_RANK") is not None else 0
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            target_device = torch.device(f"cuda:{local_rank}")
         else:
-            device_spec = "cuda"
+            target_device = torch.device("cpu")
 
         model = Qwen3VLForConditionalGeneration.from_pretrained(
             model_id,
             attn_implementation=attn_impl,
-            dtype=torch.bfloat16,
-            device_map=device_spec,
+            torch_dtype=torch.bfloat16,
+            device_map=None,
             cache_dir=cache_dir,
+            trust_remote_code=True,
         )
+        model = model.to(target_device)
         processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
         
         

@@ -20,6 +20,7 @@ from laravla.model.modules.spatial_transition.transition_decoders import (
 from laravla.model.modules.spatial_transition.transition_action_adapter import (
     TransitionToActionProjector, GatedTransitionActionAdapter
 )
+from laravla.model.modules.spatial_transition.p1_wrapper import P1TransitionWrapper
 from laravla.model.modules.spatial_transition.transition_losses import (
     mask_loss, relation_loss, transition_total_loss
 )
