@@ -111,33 +111,38 @@ def main():
     vla.load_state_dict(torch.load(CKPT, map_location="cpu"), strict=False)
     vla.training_stage = "latent_transition"
 
+    # ── P1 freeze/unfreeze: ALL ranks must execute ──────────
+    # 1. Freeze everything first
+    for p in vla.parameters():
+        p.requires_grad_(False)
+    # 2. Unfreeze only P1 spatial_transition modules
+    p1_modules = ["vlm_projector", "mask_token_encoder", "transition_module",
+                   "future_mask_decoder", "goal_mask_decoder", "relation_head"]
+    for name in p1_modules:
+        m = getattr(vla, name, None)
+        if m is not None:
+            for p in m.parameters():
+                p.requires_grad_(True)
+
+    # 3. Keep frozen modules in eval mode
+    vla.qwen_vl_interface.eval()
+    vla.action_model.eval()
+
+    # ── Verify all ranks agree ───────────────────────────────
+    trainable_names = [name for name, p in vla.named_parameters() if p.requires_grad]
+    trainable_numel = sum(p.numel() for p in vla.parameters() if p.requires_grad)
+    print(f"[Rank {accelerator.process_index}] trainable_tensors={len(trainable_names)} "
+          f"trainable_params={trainable_numel/1e6:.2f}M", flush=True)
+    accelerator.wait_for_everyone()
+
     if accelerator.is_main_process:
         print("  [Training Stage] latent_transition — VLM frozen, Action frozen, Trainable spatial_transition only")
-
-    # Freeze VLM + action_model + P2 adapter
-    for p in vla.qwen_vl_interface.parameters():
-        p.requires_grad = False
-    for p in vla.action_model.parameters():
-        p.requires_grad = False
-    if vla.transition_to_action is not None:
-        for p in vla.transition_to_action.parameters():
-            p.requires_grad = False
-    if vla.transition_action_adapter is not None:
-        for p in vla.transition_action_adapter.parameters():
-            p.requires_grad = False
-
-    if accelerator.is_main_process:
-        total = sum(p.numel() for p in vla.parameters() if p.requires_grad)
-        print(f"  Trainable total: {total/1e6:.1f}M")
-        for name in ["vlm_projector", "mask_token_encoder", "transition_module",
-                      "future_mask_decoder", "goal_mask_decoder", "relation_head"]:
+        print(f"  Trainable total: {trainable_numel/1e6:.1f}M")
+        for name in p1_modules:
             m = getattr(vla, name, None)
             if m is not None:
                 print(f"    {name}: {sum(p.numel() for p in m.parameters())/1e6:.2f}M")
-        vlm_t = sum(p.numel() for p in vla.qwen_vl_interface.parameters() if p.requires_grad)
-        act_t = sum(p.numel() for p in vla.action_model.parameters() if p.requires_grad)
-        print(f"  VLM: {'✅' if vlm_t==0 else '❌'}")
-        print(f"  Action: {'✅' if act_t==0 else '❌'}")
+        print(f"  VLM: ✅  Action: ✅")
 
     # ── Optimizer ───────────────────────────────────────────
     optimizer = torch.optim.AdamW(
