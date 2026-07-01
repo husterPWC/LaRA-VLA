@@ -26,7 +26,7 @@ sys.path.insert(0, str(_REPO))
 from lara_vla.data.spatial_cot_dataset import SpatialCoTDataset
 
 SPATIAL = str(_REPO / "output" / "spatial_lara_libero")  # NPZ data root
-INDEX = str(_REPO / "output" / "spatial_lara_libero_no_noops" / "spatial_lara_libero_index_cot_transition_all.jsonl")
+INDEX = str(_REPO / "output" / "spatial_lara_libero_no_noops" / "spatial_lara_libero_index_cot_transition_all_fixed_v3.jsonl")
 COT = os.environ.get('LEROBOT_ROOT',
                       str(_REPO.parent / 'datasets/lovejuly/libero_lerobot_all'))
 ALIGN = SPATIAL + "/cot_spatial_alignment.json"
@@ -69,7 +69,13 @@ def build_video(ds, suite, task_id, demo_id):
             print(".", end="", flush=True)
 
     print(f" encoding {len(frames)} frames...", end="", flush=True)
-    imageio.mimsave(str(mp4_path), frames, fps=20, macro_block_size=1)
+    try:
+        imageio.mimsave(str(mp4_path), frames, fps=20)
+    except (TypeError, RuntimeError):
+        # Fallback: use pillow GIF if PyAV codec unavailable
+        gif_path = str(mp4_path).replace('.mp4', '.gif')
+        imageio.mimsave(gif_path, frames, fps=20, loop=0)
+        print(f"      (saved as GIF: {gif_path})")
     size_mb = mp4_path.stat().st_size / 1024 / 1024
     print(f" ✅ {size_mb:.1f}MB")
 
