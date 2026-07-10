@@ -123,6 +123,11 @@ def main():
             for p in m.parameters():
                 p.requires_grad_(True)
 
+    # Freeze unused modules (not in transition_action forward path)
+    if vla.transition_to_action is not None:
+        for p in vla.transition_to_action.parameters():
+            p.requires_grad_(False)
+
     # Adapter + action model always trainable
     for p in vla.transition_action_adapter.parameters():
         p.requires_grad_(True)
