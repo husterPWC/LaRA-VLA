@@ -328,7 +328,10 @@ def main():
             obs, reward, done, info = env.step(action[0])
             step_count += 1
             if done:
-                ep_success = int(info.get("success", 0)) == 1
+                # LIBERO: done=True without timeout → success (task completed)
+                # Some versions return info["success"], others just set done
+                success_val = info.get("success", 1 if step_count < args.max_steps - 1 else 0)
+                ep_success = int(success_val) == 1
 
         # Save rollout GIF
         if ep_frames and not args.no_debug:
