@@ -304,7 +304,6 @@ def main():
                 overlay_rgb = np.array(agentview_pil).astype(np.float32) * 0.5
                 overlay_rgb[:, :, 0] += current_mask * 128  # red channel
                 overlay_rgb = np.clip(overlay_rgb, 0, 255).astype(np.uint8)
-                overlay = np.clip(overlay, 0, 255).astype(np.uint8)
                 viz_path = viz_dir / f"ep{ep:02d}_step{step_count:04d}.png"
                 imageio.imwrite(str(viz_path), np.hstack([np.array(agentview_pil), overlay_rgb]))
                 debug_saved += 1
