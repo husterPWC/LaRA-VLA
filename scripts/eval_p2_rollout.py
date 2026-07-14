@@ -321,7 +321,7 @@ def main():
                 )
             action = pred["normalized_actions"][0]  # [8, 7]
 
-            if debug_saved <= max_debug:
+            if step_count < 3:
                 print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
 
             # Execute first action only
