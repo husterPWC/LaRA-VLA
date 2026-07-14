@@ -11,7 +11,7 @@ Usage:
     python scripts/eval_p2_rollout.py --suite all --episodes 10  # all suites, 10 episodes each
 """
 
-import argparse, os, sys, time
+import argparse, json, os, sys, time
 from pathlib import Path
 import numpy as np
 import torch
@@ -125,16 +125,22 @@ def main():
     print(f"  BDDL: {task_bddl_file}")
     print(f"  Working dir: {bddl_dir}")
 
-    # Get objects of interest for mask extraction
-    # Extract from env obs (keys ending in _pos are objects)
+    # Get objects_of_interest from training index (most reliable)
     objects_of_interest = []
-    # Get from BDDL problem info
-    from libero.libero.envs.bddl_utils import get_problem_info
-    problem_info = get_problem_info(task_bddl_file)
-    if "objects_of_interest" in problem_info:
-        objects_of_interest = list(problem_info["objects_of_interest"])
-    elif hasattr(task, 'obj_of_interest'):
-        objects_of_interest = list(task.obj_of_interest)
+    index_path = Path(IDX)
+    if Path(index_path).exists():
+        with open(index_path) as f:
+            for line in f:
+                e = json.loads(line)
+                if e.get("suite") == args.suite and e.get("task_id") == task_id:
+                    if "objects_of_interest" in e:
+                        objects_of_interest = e["objects_of_interest"]
+                        break
+    if not objects_of_interest:
+        raise RuntimeError(
+            f"No objects_of_interest found for {args.suite} task_{task_id}. "
+            f"Check index: {index_path}"
+        )
 
     success_count = 0
     results = []
