@@ -36,25 +36,60 @@ def get_gt_mask_from_env(env, objects_of_interest, debug=False):
                              mode="offscreen", segmentation=True)
         mask = np.zeros((224, 224), dtype=np.float32)
         model = env.sim.model
-        matched_geoms = set()
-        for body_id in range(model.nbody):
-            body_name = model.body(body_id).name.lower()
-            for obj_name in objects_of_interest:
-                obj_lower = obj_name.lower().replace("_", "")
-                # Exact match: body_name must contain obj_lower as a whole token
-                if obj_lower in body_name:
+
+        if debug:
+            print(f"  [MASK] seg shape: {seg.shape}, dtype: {seg.dtype}")
+            if seg.ndim == 3:
+                for c in range(seg.shape[2]):
+                    print(f"  [MASK] seg ch{c} unique: {sorted(np.unique(seg[:,:,c]))}")
+            # Print geom name mapping for seg ids
+            seg_ids = sorted(np.unique(seg[:,:,0])) if seg.ndim == 3 else sorted(np.unique(seg))
+            for sid in seg_ids:
+                if sid > 0 and sid <= model.ngeom:
+                    gname = model.geom(sid - 1).name
+                    bname = model.body(model.geom_bodyid[sid - 1]).name
+                    print(f"  [MASK] seg_id={sid} geom={gname} body={bname}")
+
+        # Match object names to bodies
+        matched_ids = set()
+        for obj_name in objects_of_interest:
+            obj_lower = obj_name.lower().replace("_", "")
+            for body_id in range(model.nbody):
+                body_name = model.body(body_id).name.lower().replace("_", "")
+                if obj_lower == body_name or body_name == obj_lower:
                     for geom_id in range(model.ngeom):
                         if model.geom_bodyid[geom_id] == body_id:
-                            matched_geoms.add(geom_id)
-                            geom_mask = (seg[:, :, 0] == geom_id + 1)
-                            mask = np.maximum(mask, geom_mask.astype(np.float32))
+                            matched_ids.add(geom_id + 1)
+
         if debug:
-            print(f"  [MASK] seg unique ids: {np.unique(seg[:,:,0])[:20]}")
-            print(f"  [MASK] matched geom ids: {sorted(matched_geoms)}")
-            print(f"  [MASK] mask px: {int(mask.sum())}")
+            print(f"  [MASK] objects: {objects_of_interest}")
+            print(f"  [MASK] matched seg ids: {sorted(matched_ids)}")
+            if not matched_ids:
+                # Try partial matching
+                for obj_name in objects_of_interest:
+                    matching = []
+                    obj_lower = obj_name.lower().replace("_", "")
+                    for geom_id in range(model.ngeom):
+                        gname = model.geom(geom_id).name.lower().replace("_", "")
+                        bname = model.body(model.geom_bodyid[geom_id]).name.lower().replace("_", "")
+                        if obj_lower in gname or obj_lower in bname or gname in obj_lower or bname in obj_lower:
+                            matching.append((geom_id+1, gname, bname))
+                    if matching:
+                        print(f"  [MASK] partial matches for '{obj_name}': {matching[:5]}")
+
+        # Build mask from matched seg ids
+        for sid in matched_ids:
+            if seg.ndim == 3:
+                mask = np.maximum(mask, (seg[:, :, 0] == sid).astype(np.float32))
+            else:
+                mask = np.maximum(mask, (seg == sid).astype(np.float32))
+
+        if debug:
+            print(f"  [MASK] final mask px: {int(mask.sum())}")
         return mask
     except Exception as e:
-        print(f"  [WARN] mask extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
         return np.zeros((224, 224), dtype=np.float32)
 
 
