@@ -731,6 +731,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
 
             # Action prediction from conditioned hidden states
             state_t = torch.from_numpy(np.array(state)).to(conditioned_vl.device, dtype=conditioned_vl.dtype) if state is not None else None
+            if state_t is not None and state_t.ndim == 2:
+                state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
             with torch.autocast("cuda", dtype=torch.float32):
                 pred_actions = self.action_model.predict_action(conditioned_vl, state_t)
 
