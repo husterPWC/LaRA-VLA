@@ -360,6 +360,7 @@ def main():
     # Save results
     output_dir = Path(os.path.abspath(args.output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"  [PATH] output_dir={output_dir}")
     with open(output_dir / f"{args.suite}_task{task_id:02d}.json", "w") as f:
         json.dump({"suite": args.suite, "task_id": task_id, "success_rate": success_rate,
                    "results": results}, f, indent=2)
