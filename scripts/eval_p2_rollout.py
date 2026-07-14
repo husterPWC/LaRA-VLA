@@ -107,10 +107,12 @@ def main():
 
     task_name = task.name
     task_description = task.language
-    task_bddl_file = Path(task.problem_folder) / task.bddl_file if hasattr(task, 'bddl_file') else None
+    # Use task.bddl_file directly (relative to bddl_files dir, like original eval)
+    task_bddl_file = task.bddl_file if hasattr(task, 'bddl_file') else None
 
     print(f"  Task: {task_name}")
     print(f"  Instruction: {task_description}")
+    print(f"  BDDL: {task_bddl_file}")
 
     # Get objects of interest for mask extraction
     objects_of_interest = []
@@ -122,7 +124,7 @@ def main():
 
     for ep in range(args.episodes):
         env_args = {
-            "bddl_file_name": str(task_bddl_file) if task_bddl_file else None,
+            "bddl_file_name": task_bddl_file,
             "camera_heights": 224,
             "camera_widths": 224,
             "has_renderer": False,
