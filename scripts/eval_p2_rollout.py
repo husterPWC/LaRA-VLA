@@ -325,6 +325,7 @@ def main():
             action = pred["normalized_actions"][0]  # [8, 7] — normalized [-1,1]
 
             # Actions from predict_action are already in LIBERO-compatible range
+            if step_count < 3:
                 print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
 
             # Execute action chunk (up to 8 steps, stop early if done)
