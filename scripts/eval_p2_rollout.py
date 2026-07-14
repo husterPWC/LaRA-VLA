@@ -324,14 +324,14 @@ def main():
                 )
             action = pred["normalized_actions"][0]  # [8, 7]
 
-            # Execute first action
-            for i in range(min(8, 5)):  # Execute first 5 actions
-                act = action[i]
-                obs, reward, done, info = env.step(act)
-                step_count += 1
-                if done:
-                    ep_success = int(info.get("success", 0)) == 1
-                    break
+            if debug_saved <= max_debug:
+                print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
+
+            # Execute first action only
+            obs, reward, done, info = env.step(action[0])
+            step_count += 1
+            if done:
+                ep_success = int(info.get("success", 0)) == 1
 
         elapsed = time.time() - t0
         success_count += ep_success
