@@ -28,64 +28,63 @@ CKPT = os.environ.get("LARAVLA_CKPT",
 
 
 def get_gt_mask_from_env(env, objects_of_interest, debug=False):
-    """Extract binary mask of objects_of_interest from environment instance segmentation."""
+    """Extract binary mask of objects_of_interest from environment instance segmentation.
+
+    MuJoCo/robosuite segmentation is (H,W,2): ch0=object type, ch1=instance ID.
+    We filter ch0==GEOM_TYPE (5) and match ch1 against geom IDs of target objects.
+    """
     if not objects_of_interest:
         return np.zeros((224, 224), dtype=np.float32)
     try:
         seg = env.sim.render(camera_name="agentview", height=224, width=224,
                              mode="offscreen", segmentation=True)
-        mask = np.zeros((224, 224), dtype=np.float32)
         model = env.sim.model
+        GEOM_TYPE = 5  # mjOBJ_GEOM
+
+        # seg[...,0] = type, seg[...,1] = instance ID
+        if seg.ndim == 3 and seg.shape[2] >= 2:
+            seg_type = seg[:, :, 0]
+            seg_id = seg[:, :, 1]
+        else:
+            seg_type = np.zeros_like(seg)
+            seg_id = seg
 
         if debug:
-            print(f"  [MASK] seg shape: {seg.shape}, dtype: {seg.dtype}")
-            if seg.ndim == 3:
-                for c in range(seg.shape[2]):
-                    print(f"  [MASK] seg ch{c} unique: {sorted(np.unique(seg[:,:,c]))}")
-            # Print geom name mapping for seg ids
-            seg_ids = sorted(np.unique(seg[:,:,0])) if seg.ndim == 3 else sorted(np.unique(seg))
-            for sid in seg_ids:
-                if sid > 0 and sid <= model.ngeom:
-                    gname = model.geom(sid - 1).name
-                    bname = model.body(model.geom_bodyid[sid - 1]).name
-                    print(f"  [MASK] seg_id={sid} geom={gname} body={bname}")
+            print(f"  [MASK] seg type unique: {sorted(np.unique(seg_type))}")
+            print(f"  [MASK] seg id unique count: {len(np.unique(seg_id))}")
+            # Map a few seg instance IDs to geom names
+            for sid in sorted(np.unique(seg_id))[:10]:
+                gid = sid - 1 if sid >= 1 else -1
+                if 0 <= gid < model.ngeom:
+                    gname = model.geom(gid).name or "(empty)"
+                    bname = model.body(model.geom_bodyid[gid]).name or "(empty)"
+                    print(f"  [MASK]   seg_inst_id={sid} geom[{gid}]='{gname}' body='{bname}'")
 
-        # Match object names to bodies
-        matched_ids = set()
+        # Find target geom IDs by matching object names against geom/body names
+        target_ids = set()
         for obj_name in objects_of_interest:
             obj_lower = obj_name.lower().replace("_", "")
-            for body_id in range(model.nbody):
-                body_name = model.body(body_id).name.lower().replace("_", "")
-                if obj_lower == body_name or body_name == obj_lower:
-                    for geom_id in range(model.ngeom):
-                        if model.geom_bodyid[geom_id] == body_id:
-                            matched_ids.add(geom_id + 1)
+            for gid in range(model.ngeom):
+                gname = (model.geom(gid).name or "").lower().replace("_", "")
+                bname = (model.body(model.geom_bodyid[gid]).name or "").lower().replace("_", "")
+                # Match: must be non-empty AND contain/equal object name
+                if gname and (obj_lower in gname or gname in obj_lower):
+                    target_ids.add(gid + 1)
+                elif bname and (obj_lower in bname or bname in obj_lower):
+                    target_ids.add(gid + 1)
 
         if debug:
             print(f"  [MASK] objects: {objects_of_interest}")
-            print(f"  [MASK] matched seg ids: {sorted(matched_ids)}")
-            if not matched_ids:
-                # Try partial matching
-                for obj_name in objects_of_interest:
-                    matching = []
-                    obj_lower = obj_name.lower().replace("_", "")
-                    for geom_id in range(model.ngeom):
-                        gname = model.geom(geom_id).name.lower().replace("_", "")
-                        bname = model.body(model.geom_bodyid[geom_id]).name.lower().replace("_", "")
-                        if obj_lower in gname or obj_lower in bname or gname in obj_lower or bname in obj_lower:
-                            matching.append((geom_id+1, gname, bname))
-                    if matching:
-                        print(f"  [MASK] partial matches for '{obj_name}': {matching[:5]}")
+            print(f"  [MASK] target seg inst ids: {sorted(target_ids)}")
 
-        # Build mask from matched seg ids
-        for sid in matched_ids:
-            if seg.ndim == 3:
-                mask = np.maximum(mask, (seg[:, :, 0] == sid).astype(np.float32))
-            else:
-                mask = np.maximum(mask, (seg == sid).astype(np.float32))
+        # Build mask: geom type + target instance IDs
+        is_geom = (seg_type == GEOM_TYPE)
+        is_target = np.isin(seg_id, list(target_ids))
+        mask = (is_geom & is_target).astype(np.float32)
 
         if debug:
-            print(f"  [MASK] final mask px: {int(mask.sum())}")
+            print(f"  [MASK] mask px: {int(mask.sum())} (geom px: {is_geom.sum()}, target px: {is_target.sum()})")
+
         return mask
     except Exception as e:
         import traceback
