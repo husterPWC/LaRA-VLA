@@ -97,8 +97,8 @@ def main():
     if libero_home and libero_home not in sys.path:
         sys.path.insert(0, libero_home)
     import libero
+    from libero.libero import benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
-    from libero.libero import benchmark
 
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.suite]()
