@@ -31,7 +31,7 @@ def get_gt_mask_from_env(env, objects_of_interest):
     """Extract binary mask of objects_of_interest from environment instance segmentation."""
     # LIBERO uses robosuite; get instance seg from sim
     seg = env.sim.render(camera_name="agentview", height=224, width=224,
-                         mode='segmentation_instance')
+                         mode="offscreen", segmentation=True)
     # Map instance IDs to object names via env model
     mask = np.zeros((224, 224), dtype=np.float32)
     try:
