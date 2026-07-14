@@ -147,6 +147,7 @@ def main():
         ep_success = False
 
         t0 = time.time()
+        first_step = True
         while not done and step_count < args.max_steps:
             # Get observation
             agentview = obs["agentview_image"]
@@ -155,6 +156,10 @@ def main():
 
             # Get GT mask from environment
             current_mask = get_gt_mask_from_env(env, objects_of_interest)
+            if first_step:
+                print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
+                print(f"  [DEBUG] mask sum: {current_mask.sum()}, shape: {current_mask.shape}")
+                first_step = False
 
             # Get robot state (7-dim: eef_pos + eef_quat or gripper)
             eef_pos = obs.get("robot0_eef_pos", np.zeros(3))
