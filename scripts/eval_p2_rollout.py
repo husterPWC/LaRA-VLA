@@ -27,7 +27,35 @@ CKPT = os.environ.get("LARAVLA_CKPT",
     str(_REPO.parent / "models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt"))
 
 
-def get_gt_mask_from_env(env, objects_of_interest, debug=False):
+def get_held_object(env, objects_of_interest):
+    """Determine which object the robot is holding from gripper state + positions."""
+    try:
+        obs = env._get_observations()
+        gripper = obs.get("robot0_gripper_qpos", np.array([0]))
+        # gripper_qpos[0] < 0 → closed (holding); > 0 → open (reaching)
+        is_closed = float(gripper[0]) < 0
+        if not is_closed or not objects_of_interest:
+            return None
+
+        eef_pos = obs.get("robot0_eef_pos", np.zeros(3))
+        best_obj = None
+        best_dist = float("inf")
+        for obj_name in objects_of_interest:
+            pos_key = f"{obj_name}_pos"
+            if pos_key in obs:
+                dist = np.linalg.norm(obs[pos_key] - eef_pos)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_obj = obj_name
+        return best_obj
+    except Exception:
+        return None
+
+
+def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
+    """Extract binary mask of objects_of_interest from environment instance segmentation.
+    Supports dynamic filtering for libero_10 based on gripper state.
+    """
     """Extract binary mask of objects_of_interest from environment instance segmentation.
 
     MuJoCo/robosuite segmentation is (H,W,2): ch0=object type, ch1=instance ID.
@@ -76,6 +104,23 @@ def get_gt_mask_from_env(env, objects_of_interest, debug=False):
         if debug:
             print(f"  [MASK] objects: {objects_of_interest}")
             print(f"  [MASK] target seg inst ids: {sorted(target_ids)}")
+
+        # Dynamic filtering for libero_10
+        if suite == "libero_10":
+            held = get_held_object(env, objects_of_interest)
+            if held is not None:
+                # Filter to only show held object
+                held_ids = set()
+                held_lower = held.lower().replace("_", "")
+                for gid in range(model.ngeom):
+                    gname = (model.geom(gid).name or "").lower().replace("_", "")
+                    bname = (model.body(model.geom_bodyid[gid]).name or "").lower().replace("_", "")
+                    if (gname and held_lower in gname) or (bname and held_lower in bname):
+                        held_ids.add(gid + 1)
+                if held_ids:
+                    target_ids = held_ids
+                    if debug:
+                        print(f"  [MASK] dynamic: held={held}, ids={sorted(target_ids)}")
 
         # Build mask: geom type + target instance IDs
         is_geom = (seg_type == GEOM_TYPE)
@@ -212,7 +257,7 @@ def main():
             agentview_pil = Image.fromarray(agentview[::-1, :, :])  # LIBERO flips
 
             # Get GT mask from environment
-            current_mask = get_gt_mask_from_env(env, objects_of_interest, debug=first_step)
+            current_mask = get_gt_mask_from_env(env, objects_of_interest, suite=args.suite, debug=first_step)
             if first_step:
                 print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
                 first_step = False
