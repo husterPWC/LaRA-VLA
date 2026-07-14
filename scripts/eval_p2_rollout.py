@@ -80,13 +80,18 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
         if debug:
             print(f"  [MASK] seg type unique: {sorted(np.unique(seg_type))}")
             print(f"  [MASK] seg id unique count: {len(np.unique(seg_id))}")
-            # Map a few seg instance IDs to geom names
-            for sid in sorted(np.unique(seg_id))[:10]:
-                gid = sid - 1 if sid >= 1 else -1
-                if 0 <= gid < model.ngeom:
-                    gname = model.geom(gid).name or "(empty)"
-                    bname = model.body(model.geom_bodyid[gid]).name or "(empty)"
-                    print(f"  [MASK]   seg_inst_id={sid} geom[{gid}]='{gname}' body='{bname}'")
+            # Print ALL geom names matching objects or containing keywords
+            obj_keywords = set()
+            for obj in objects_of_interest:
+                for part in obj.lower().replace("_", " ").split():
+                    if len(part) >= 3:
+                        obj_keywords.add(part)
+            for gid in range(model.ngeom):
+                gname = (model.geom(gid).name or "").lower()
+                bname = (model.body(model.geom_bodyid[gid]).name or "").lower()
+                if any(kw in gname or kw in bname for kw in obj_keywords):
+                    sid = gid + 1
+                    print(f"  [MASK]   geom[{gid}] seg_id={sid} '{model.geom(gid).name}' body='{model.body(model.geom_bodyid[gid]).name}'")
 
         # Find target geom IDs by matching object names against geom/body names
         target_ids = set()
