@@ -120,8 +120,10 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
                 elif bname and base_norm in bname:
                     matched = True
                 if matched and region_norm:
-                    # Also check region in body name
-                    matched = region_norm in bname
+                    # Check each region keyword (e.g., "middle", "region") in body name
+                    region_keywords = region_norm.split("region") if "region" in region_norm else [region_norm]
+                    region_ok = any(kw and kw in bname for kw in region_keywords if kw)
+                    matched = region_ok if region_keywords else True
                 if matched:
                     target_ids.add(gid + 1)
 
