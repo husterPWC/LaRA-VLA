@@ -189,7 +189,7 @@ def main():
     # ── Load P2 model ────────────────────────────────────────
     from laravla.model.tools import read_mode_config
     from omegaconf import OmegaConf
-    model_cfg, _ = read_mode_config(Path(CKPT))
+    model_cfg, norm_stats = read_mode_config(Path(CKPT))
     model_cfg["framework"]["mask_conditioned_transition"] = {
         "enable": True, "num_mask_tokens": 8, "num_transition_tokens": 6,
         "mask_res": 56, "num_relation_labels": 6, "transition_dim": 512,
@@ -198,6 +198,8 @@ def main():
     from laravla.model.framework import build_framework
     vla = build_framework(OmegaConf.create(model_cfg))
     vla.load_state_dict(torch.load(CKPT, map_location="cpu"), strict=False)
+    # norm_stats for action un-normalization
+    norm_stats_loaded = norm_stats
 
     p2_state = torch.load(args.p2_ckpt, map_location="cpu")
     if "model_state_dict" in p2_state:
@@ -319,7 +321,10 @@ def main():
                     state=np.array([state]),
                     current_masks=np.array([current_mask]),
                 )
-            action = pred["normalized_actions"][0]  # [8, 7]
+            action = pred["normalized_actions"][0]  # [8, 7] — normalized [-1,1]
+
+            # Un-normalize actions using dataset stats
+            action = vla.unnormalize_actions(action, norm_stats)
 
             if step_count < 3:
                 print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
