@@ -157,6 +157,8 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
         if debug:
             print(f"  [MASK] mask px: {int(mask.sum())} (geom px: {is_geom.sum()}, target px: {is_target.sum()})")
 
+        # Flip like LIBERO observation: agentview[::-1, :, :]
+        mask = mask[::-1, :].copy()
         return mask
     except Exception as e:
         import traceback
@@ -297,14 +299,14 @@ def main():
                 print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
                 first_step = False
 
-            # Save debug images
+            # Save debug images (mask already matches flipped RGB from get_gt_mask_from_env)
             if debug_saved < max_debug and not args.no_debug:
-                overlay = (np.array(agentview_pil).astype(np.float32) * 0.5 +
-                           np.stack([current_mask * 255, np.zeros_like(current_mask),
-                                     np.zeros_like(current_mask)], axis=-1) * 0.5)
+                overlay_rgb = np.array(agentview_pil).astype(np.float32) * 0.5
+                overlay_rgb[:, :, 0] += current_mask * 128  # red channel
+                overlay_rgb = np.clip(overlay_rgb, 0, 255).astype(np.uint8)
                 overlay = np.clip(overlay, 0, 255).astype(np.uint8)
                 viz_path = viz_dir / f"ep{ep:02d}_step{step_count:04d}.png"
-                imageio.imwrite(str(viz_path), np.hstack([np.array(agentview_pil), overlay]))
+                imageio.imwrite(str(viz_path), np.hstack([np.array(agentview_pil), overlay_rgb]))
                 debug_saved += 1
 
             # Get robot state (7-dim: eef_pos + eef_quat or gripper)
