@@ -64,6 +64,9 @@ def main():
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--max-steps", type=int, default=400)
     parser.add_argument("--output-dir", type=str, default=str(_REPO / "results/P2_eval"))
+    parser.add_argument("--index-path", type=str,
+                        default=str(_REPO / "output" / "spatial_lara_libero_no_noops" /
+                                    "spatial_lara_libero_index_cot_transition_all_fixed_v3.jsonl"))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -127,7 +130,7 @@ def main():
 
     # Get objects_of_interest from training index (most reliable)
     objects_of_interest = []
-    index_path = Path(IDX)
+    index_path = Path(args.index_path)
     if Path(index_path).exists():
         with open(index_path) as f:
             for line in f:
