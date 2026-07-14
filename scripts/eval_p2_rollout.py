@@ -120,8 +120,8 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
                     matched = True
                 elif bname and base_norm in bname:
                     matched = True
-                if matched and region_norm:
-                    # Region filter: only match geoms whose body contains region keyword
+                if matched and region_norm and suite == "libero_10":
+                    # Region filter only for libero_10 (dynamic mask uses region hints)
                     region_parts = [p for p in parts[base_end:] if p not in ("region", "")]
                     if region_parts:
                         matched = any(rp in bname for rp in region_parts)
@@ -131,6 +131,10 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
         if debug:
             print(f"  [MASK] objects: {objects_of_interest}")
             print(f"  [MASK] target seg inst ids: {sorted(target_ids)}")
+
+        # Fallback: if no targets matched, use all non-bg geoms
+        if not target_ids:
+            target_ids = set(sid for sid in np.unique(seg_id) if sid > 0)
 
         # Dynamic filtering for libero_10
         if suite == "libero_10":
