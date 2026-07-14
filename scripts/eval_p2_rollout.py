@@ -93,17 +93,36 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
                     sid = gid + 1
                     print(f"  [MASK]   geom[{gid}] seg_id={sid} '{model.geom(gid).name}' body='{model.body(model.geom_bodyid[gid]).name}'")
 
-        # Find target geom IDs by matching object names against geom/body names
+        # Find target geom IDs by matching object names against geom/body names.
+        # Object names like "wooden_cabinet_1_middle_region" are split into:
+        #   base = "wooden_cabinet_1", region = "middle"
+        # Match base against geom/body, and region against body suffix.
         target_ids = set()
         for obj_name in objects_of_interest:
-            obj_lower = obj_name.lower().replace("_", "")
+            parts = obj_name.lower().split("_")
+            # Find the numeric suffix (e.g., "_1") to split base from region
+            base_end = 0
+            for i, p in enumerate(parts):
+                if p.isdigit():
+                    base_end = i + 1
+                    break
+            base = "_".join(parts[:base_end])  # e.g., "wooden_cabinet_1"
+            region = "_".join(parts[base_end:])  # e.g., "middle_region" or ""
+            base_norm = base.replace("_", "")
+            region_norm = region.replace("_", "")
+
             for gid in range(model.ngeom):
                 gname = (model.geom(gid).name or "").lower().replace("_", "")
                 bname = (model.body(model.geom_bodyid[gid]).name or "").lower().replace("_", "")
-                # Match: must be non-empty AND contain/equal object name
-                if gname and (obj_lower in gname or gname in obj_lower):
-                    target_ids.add(gid + 1)
-                elif bname and (obj_lower in bname or bname in obj_lower):
+                matched = False
+                if gname and base_norm in gname:
+                    matched = True
+                elif bname and base_norm in bname:
+                    matched = True
+                if matched and region_norm:
+                    # Also check region in body name
+                    matched = region_norm in bname
+                if matched:
                     target_ids.add(gid + 1)
 
         if debug:
