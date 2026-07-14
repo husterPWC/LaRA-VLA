@@ -15,6 +15,7 @@ import argparse, json, os, sys, time
 from pathlib import Path
 import numpy as np
 import torch
+import imageio
 from PIL import Image
 
 _THIS = Path(__file__).resolve()
@@ -174,6 +175,7 @@ def main():
     parser.add_argument("--index-path", type=str,
                         default=str(_REPO / "output" / "spatial_lara_libero_no_noops" /
                                     "spatial_lara_libero_index_cot_transition_all_fixed_v3.jsonl"))
+    parser.add_argument("--no-debug", action="store_true", help="Skip saving debug images")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -255,6 +257,11 @@ def main():
     success_count = 0
     results = []
 
+    # Make debug dir
+    viz_dir = Path(args.output_dir) / f"viz_{args.suite}_task{task_id:02d}"
+    if not args.no_debug:
+        viz_dir.mkdir(parents=True, exist_ok=True)
+
     for ep in range(args.episodes):
         env_args = {
             "bddl_file_name": task_bddl_file,
@@ -273,6 +280,8 @@ def main():
         done = False
         step_count = 0
         ep_success = False
+        debug_saved = 0
+        max_debug = 5  # Save first 5 frames per episode
 
         t0 = time.time()
         first_step = True
@@ -287,6 +296,16 @@ def main():
             if first_step:
                 print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
                 first_step = False
+
+            # Save debug images
+            if debug_saved < max_debug and not args.no_debug:
+                overlay = (np.array(agentview_pil).astype(np.float32) * 0.5 +
+                           np.stack([current_mask * 255, np.zeros_like(current_mask),
+                                     np.zeros_like(current_mask)], axis=-1) * 0.5)
+                overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+                viz_path = viz_dir / f"ep{ep:02d}_step{step_count:04d}.png"
+                imageio.imwrite(str(viz_path), np.hstack([np.array(agentview_pil), overlay]))
+                debug_saved += 1
 
             # Get robot state (7-dim: eef_pos + eef_quat or gripper)
             eef_pos = obs.get("robot0_eef_pos", np.zeros(3))
