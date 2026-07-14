@@ -263,7 +263,7 @@ def main():
     results = []
 
     # Make debug dir
-    viz_dir = Path(args.output_dir) / f"viz_{args.suite}_task{task_id:02d}"
+    viz_dir = Path(args.output_dir).resolve() / f"viz_{args.suite}_task{task_id:02d}"
     if not args.no_debug:
         viz_dir.mkdir(parents=True, exist_ok=True)
 
@@ -358,7 +358,7 @@ def main():
     print(f"{'='*60}")
 
     # Save results
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / f"{args.suite}_task{task_id:02d}.json", "w") as f:
         json.dump({"suite": args.suite, "task_id": task_id, "success_rate": success_rate,
