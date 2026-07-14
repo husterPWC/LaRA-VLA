@@ -29,25 +29,31 @@ CKPT = os.environ.get("LARAVLA_CKPT",
 
 def get_gt_mask_from_env(env, objects_of_interest):
     """Extract binary mask of objects_of_interest from environment instance segmentation."""
-    # LIBERO uses robosuite; get instance seg from sim
-    seg = env.sim.render(camera_name="agentview", height=224, width=224,
-                         mode="offscreen", segmentation=True)
-    # Map instance IDs to object names via env model
-    mask = np.zeros((224, 224), dtype=np.float32)
+    if not objects_of_interest:
+        return np.zeros((224, 224), dtype=np.float32)
     try:
-        # Try to find instance IDs for objects_of_interest
+        # Use env's segmentation API
+        seg = env.sim.render(camera_name="agentview", height=224, width=224,
+                             mode="offscreen", instance_segmentation=True)
+        mask = np.zeros((224, 224), dtype=np.float32)
         model = env.sim.model
-        for obj_name in objects_of_interest:
-            # Match object name to geoms
-            for geom_id in range(model.ngeom):
-                geom_name = model.geom(geom_id).name
-                if obj_name in geom_name or geom_name.startswith(obj_name):
-                    geom_mask = (seg[:, :, 0] == geom_id + 1)  # instance seg
-                    mask = np.maximum(mask, geom_mask.astype(np.float32))
-    except Exception:
-        # Fallback: use seg directly if object mapping fails
-        pass
-    return mask
+        for body_id in range(model.nbody):
+            body_name = model.body(body_id).name.lower()
+            for obj_name in objects_of_interest:
+                obj_lower = obj_name.lower().replace("_", "")
+                if obj_lower in body_name or body_name.startswith(obj_lower):
+                    # Check which geoms belong to this body
+                    for geom_id in range(model.ngeom):
+                        if model.geom_bodyid[geom_id] == body_id:
+                            geom_mask = (seg[:, :, 0] == geom_id + 1)
+                            mask = np.maximum(mask, geom_mask.astype(np.float32))
+        if mask.sum() == 0:
+            # Fallback: use all non-background pixels
+            mask = (seg[:, :, 0] > 0).astype(np.float32)
+        return mask
+    except Exception as e:
+        print(f"  [WARN] mask extraction failed: {e}")
+        return np.zeros((224, 224), dtype=np.float32)
 
 
 def main():
@@ -120,8 +126,14 @@ def main():
     print(f"  Working dir: {bddl_dir}")
 
     # Get objects of interest for mask extraction
+    # Extract from env obs (keys ending in _pos are objects)
     objects_of_interest = []
-    if hasattr(task, 'obj_of_interest'):
+    # Get from BDDL problem info
+    from libero.libero.envs.bddl_utils import get_problem_info
+    problem_info = get_problem_info(task_bddl_file)
+    if "objects_of_interest" in problem_info:
+        objects_of_interest = list(problem_info["objects_of_interest"])
+    elif hasattr(task, 'obj_of_interest'):
         objects_of_interest = list(task.obj_of_interest)
 
     success_count = 0
