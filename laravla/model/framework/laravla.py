@@ -771,12 +771,14 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 )
                 last_hidden = qwenvl_outputs.hidden_states[-1]   # [B, L, H]
 
-        state = torch.from_numpy(np.array(state)).to(last_hidden.device, dtype=last_hidden.dtype) if state is not None else None
+        state_t = torch.from_numpy(np.array(state)).to(last_hidden.device, dtype=last_hidden.dtype) if state is not None else None
+        if state_t is not None and state_t.ndim == 2:
+            state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
         # Step 4: Action Expert Forward and Loss
         with torch.autocast("cuda", dtype=torch.float32):
             pred_actions = self.action_model.predict_action(
                 last_hidden,
-                state,
+                state_t,
             )  # (B, chunk_len, action_dim)
 
         normalized_actions = pred_actions.detach().cpu().numpy()
