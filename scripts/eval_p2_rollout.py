@@ -226,7 +226,6 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / f"{args.suite}_task{task_id:02d}.json", "w") as f:
-        import json
         json.dump({"suite": args.suite, "task_id": task_id, "success_rate": success_rate,
                    "results": results}, f, indent=2)
 
