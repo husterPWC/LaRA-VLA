@@ -107,12 +107,17 @@ def main():
 
     task_name = task.name
     task_description = task.language
-    # Use task.bddl_file directly (relative to bddl_files dir, like original eval)
-    task_bddl_file = task.bddl_file if hasattr(task, 'bddl_file') else None
+    # BDDL path: problem_folder/bddl_file relative to bddl_files dir
+    task_bddl_file = f"{task.problem_folder}/{task.bddl_file}" if hasattr(task, 'bddl_file') else None
+
+    # Change to bddl_files dir (env checks os.path.exists on bare bddl_file_name)
+    bddl_dir = get_libero_path("bddl_files")
+    os.chdir(bddl_dir)
 
     print(f"  Task: {task_name}")
     print(f"  Instruction: {task_description}")
     print(f"  BDDL: {task_bddl_file}")
+    print(f"  Working dir: {bddl_dir}")
 
     # Get objects of interest for mask extraction
     objects_of_interest = []
