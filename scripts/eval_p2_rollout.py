@@ -92,6 +92,10 @@ def main():
     # ── Set up LIBERO ────────────────────────────────────────
     os.environ["MUJOCO_GL"] = "egl"
     os.environ["PYOPENGL_PLATFORM"] = "egl"
+    # Add LIBERO to path (like original eval_libero.py does)
+    libero_home = os.environ.get("LIBERO_HOME", "")
+    if libero_home and libero_home not in sys.path:
+        sys.path.insert(0, libero_home)
     import libero
     from libero.libero.envs import OffScreenRenderEnv
     from libero.libero import benchmark
