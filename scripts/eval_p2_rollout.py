@@ -282,8 +282,7 @@ def main():
         done = False
         step_count = 0
         ep_success = False
-        debug_saved = 0
-        max_debug = 5  # Save first 5 frames per episode
+        ep_frames = []  # Collect all frames for GIF
 
         t0 = time.time()
         first_step = True
@@ -299,14 +298,12 @@ def main():
                 print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
                 first_step = False
 
-            # Save debug images (mask already matches flipped RGB from get_gt_mask_from_env)
-            if debug_saved < max_debug and not args.no_debug:
+            # Save frame for GIF
+            if not args.no_debug:
                 overlay_rgb = np.array(agentview_pil).astype(np.float32) * 0.5
-                overlay_rgb[:, :, 0] += current_mask * 128  # red channel
+                overlay_rgb[:, :, 0] += current_mask * 128
                 overlay_rgb = np.clip(overlay_rgb, 0, 255).astype(np.uint8)
-                viz_path = viz_dir / f"ep{ep:02d}_step{step_count:04d}.png"
-                imageio.imwrite(str(viz_path), np.hstack([np.array(agentview_pil), overlay_rgb]))
-                debug_saved += 1
+                ep_frames.append(np.hstack([np.array(agentview_pil), overlay_rgb]))
 
             # Get robot state (7-dim: eef_pos + eef_quat or gripper)
             eef_pos = obs.get("robot0_eef_pos", np.zeros(3))
@@ -332,6 +329,12 @@ def main():
             step_count += 1
             if done:
                 ep_success = int(info.get("success", 0)) == 1
+
+        # Save rollout GIF
+        if ep_frames and not args.no_debug:
+            gif_path = viz_dir / f"ep{ep:02d}_rollout.gif"
+            imageio.mimsave(str(gif_path), ep_frames, fps=10, loop=0)
+            print(f"  📹 GIF saved: {gif_path}")
 
         elapsed = time.time() - t0
         success_count += ep_success
