@@ -27,29 +27,31 @@ CKPT = os.environ.get("LARAVLA_CKPT",
     str(_REPO.parent / "models/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt"))
 
 
-def get_gt_mask_from_env(env, objects_of_interest):
+def get_gt_mask_from_env(env, objects_of_interest, debug=False):
     """Extract binary mask of objects_of_interest from environment instance segmentation."""
     if not objects_of_interest:
         return np.zeros((224, 224), dtype=np.float32)
     try:
-        # Use env's segmentation API
         seg = env.sim.render(camera_name="agentview", height=224, width=224,
                              mode="offscreen", segmentation=True)
         mask = np.zeros((224, 224), dtype=np.float32)
         model = env.sim.model
+        matched_geoms = set()
         for body_id in range(model.nbody):
             body_name = model.body(body_id).name.lower()
             for obj_name in objects_of_interest:
                 obj_lower = obj_name.lower().replace("_", "")
-                if obj_lower in body_name or body_name.startswith(obj_lower):
-                    # Check which geoms belong to this body
+                # Exact match: body_name must contain obj_lower as a whole token
+                if obj_lower in body_name:
                     for geom_id in range(model.ngeom):
                         if model.geom_bodyid[geom_id] == body_id:
+                            matched_geoms.add(geom_id)
                             geom_mask = (seg[:, :, 0] == geom_id + 1)
                             mask = np.maximum(mask, geom_mask.astype(np.float32))
-        if mask.sum() == 0:
-            # Fallback: use all non-background pixels
-            mask = (seg[:, :, 0] > 0).astype(np.float32)
+        if debug:
+            print(f"  [MASK] seg unique ids: {np.unique(seg[:,:,0])[:20]}")
+            print(f"  [MASK] matched geom ids: {sorted(matched_geoms)}")
+            print(f"  [MASK] mask px: {int(mask.sum())}")
         return mask
     except Exception as e:
         print(f"  [WARN] mask extraction failed: {e}")
@@ -176,10 +178,9 @@ def main():
             agentview_pil = Image.fromarray(agentview[::-1, :, :])  # LIBERO flips
 
             # Get GT mask from environment
-            current_mask = get_gt_mask_from_env(env, objects_of_interest)
+            current_mask = get_gt_mask_from_env(env, objects_of_interest, debug=first_step)
             if first_step:
                 print(f"  [DEBUG] objects_of_interest: {objects_of_interest}")
-                print(f"  [DEBUG] mask sum: {current_mask.sum()}, shape: {current_mask.shape}")
                 first_step = False
 
             # Get robot state (7-dim: eef_pos + eef_quat or gripper)
