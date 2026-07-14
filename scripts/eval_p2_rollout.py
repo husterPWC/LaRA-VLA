@@ -120,6 +120,11 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
                     matched = True
                 elif bname and base_norm in bname:
                     matched = True
+                if matched and region_norm:
+                    # Region filter: only match geoms whose body contains region keyword
+                    region_parts = [p for p in parts[base_end:] if p not in ("region", "")]
+                    if region_parts:
+                        matched = any(rp in bname for rp in region_parts)
                 if matched:
                     target_ids.add(gid + 1)
 
