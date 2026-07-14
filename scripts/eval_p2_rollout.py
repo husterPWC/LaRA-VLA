@@ -324,14 +324,13 @@ def main():
             if step_count < 3:
                 print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
 
-            # Execute first action only
-            obs, reward, done, info = env.step(action[0])
-            step_count += 1
-            if done:
-                # LIBERO: done=True without timeout → success (task completed)
-                # Some versions return info["success"], others just set done
-                success_val = info.get("success", 1 if step_count < args.max_steps - 1 else 0)
-                ep_success = int(success_val) == 1
+            # Execute action chunk (up to 8 steps, stop early if done)
+            for i in range(len(action)):
+                obs, reward, done, info = env.step(action[i])
+                step_count += 1
+                if done:
+                    ep_success = True
+                    break
 
         # Save rollout GIF
         if ep_frames and not args.no_debug:
