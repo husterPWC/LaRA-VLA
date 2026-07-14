@@ -120,9 +120,6 @@ def get_gt_mask_from_env(env, objects_of_interest, suite="", debug=False):
                     matched = True
                 elif bname and base_norm in bname:
                     matched = True
-                # For union-mask suites (spatial/object/goal): match base object only, no region filter
-            # Region filtering is only for dynamic mask (libero_10) which is handled separately
-            pass  # keep matched=True from base name check
                 if matched:
                     target_ids.add(gid + 1)
 
