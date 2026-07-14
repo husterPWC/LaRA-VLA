@@ -34,7 +34,7 @@ def get_gt_mask_from_env(env, objects_of_interest):
     try:
         # Use env's segmentation API
         seg = env.sim.render(camera_name="agentview", height=224, width=224,
-                             mode="offscreen", instance_segmentation=True)
+                             mode="offscreen", segmentation=True)
         mask = np.zeros((224, 224), dtype=np.float32)
         model = env.sim.model
         for body_id in range(model.nbody):
