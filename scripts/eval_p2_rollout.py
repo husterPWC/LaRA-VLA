@@ -323,9 +323,12 @@ def main():
             action = pred["normalized_actions"][0]  # [8, 7] — normalized [-1,1]
 
             # Un-normalize actions using dataset stats
-            action = vla.unnormalize_actions(action, norm_stats)
-
             if step_count < 3:
+                print(f"  [ACT-norm] before unnorm: min={action.min():.3f} max={action.max():.3f}")
+            action = vla.unnormalize_actions(action, norm_stats)
+            if step_count < 3:
+                print(f"  [ACT-norm] after unnorm:  min={action.min():.3f} max={action.max():.3f}")
+                print(f"  [ACT-norm] q01={norm_stats['q01'][:3]}  q99={norm_stats['q99'][:3]}")
                 print(f"  [ACT] step={step_count} action[0]={action[0][:3]}... min={action.min():.3f} max={action.max():.3f}")
 
             # Execute action chunk (up to 8 steps, stop early if done)
