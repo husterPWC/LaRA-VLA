@@ -680,17 +680,18 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         batch_images: List[List[Image.Image]],
         instructions: List[str],
         state: Optional[np.ndarray] = None,
+        current_masks: Optional[np.ndarray] = None,
         **kwargs,
     ) -> np.ndarray:
         """
         Inference: predict future actions via latent reasoning + diffusion sampling.
 
-        Steps:
-          1. Resize images to training resolution (if specified)
-          2. Encode with QwenVL
-             - forward_latent for implicit reasoning (iterative KV-Cache)
-             - Fallback to normal forward if forward_latent unavailable
-          3. Action model prediction from hidden states
+        Args:
+            batch_images: List[List[PIL.Image]] per-sample image lists
+            instructions: List[str] per-sample instruction strings
+            state: Optional[np.ndarray] robot state [B, state_dim]
+            current_masks: Optional[np.ndarray] current affordance mask [B, H, W]
+                           If provided, runs through transition module → gated adapter.
 
         Returns:
             dict with normalized_actions (np.ndarray [B, T, action_dim]).
@@ -698,7 +699,46 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         train_obs_image_size = getattr(self.config.datasets.vla_data, "image_size", None)
         if train_obs_image_size:
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
-    
+
+        # ── Transition-conditioned inference ──────────────────
+        use_transition = (
+            current_masks is not None
+            and self.transition_enabled
+            and self.transition_action_adapter is not None
+        )
+
+        if use_transition:
+            # Clean encode (no latent reasoning)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                qwen_out = self.qwen_vl_interface.encode_observation(
+                    images=batch_images, instructions=instructions,
+                    output_hidden_states=True,
+                )
+            vlm_hidden = qwen_out.hidden_states[-1]  # [B, L, 2560]
+
+            # Current mask → mask tokens
+            cur_masks_t = torch.from_numpy(
+                np.array(current_masks)
+            ).unsqueeze(1).to(vlm_hidden.device).float()  # [B, 1, H, W]
+
+            # Bottleneck transition
+            vlm_proj = self.vlm_projector(vlm_hidden.float())
+            mask_tokens = self.mask_token_encoder(cur_masks_t)
+            transition_tokens = self.transition_module(vlm_proj, mask_tokens)
+
+            # Gated adapter
+            conditioned_vl = self.transition_action_adapter(vlm_hidden.float(), transition_tokens)
+
+            # Action prediction from conditioned hidden states
+            state_t = torch.from_numpy(np.array(state)).to(conditioned_vl.device, dtype=conditioned_vl.dtype) if state is not None else None
+            with torch.autocast("cuda", dtype=torch.float32):
+                pred_actions = self.action_model.predict_action(conditioned_vl, state_t)
+
+            normalized_actions = pred_actions.detach().cpu().numpy()
+            return {"normalized_actions": normalized_actions, "thinking_gen_time": 0.0,
+                    "transition_tokens": transition_tokens}
+
+        # ── Original inference path ───────────────────────────
         use_iterative_forward = hasattr(self.qwen_vl_interface, 'forward_latent')
 
         # Step 1: QWenVL input format
