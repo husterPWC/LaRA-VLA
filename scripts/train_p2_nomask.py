@@ -49,11 +49,15 @@ def main():
     parser.add_argument("--eval-interval", type=int, default=2000)
     parser.add_argument("--eval-batches", type=int, default=200)
     parser.add_argument("--output-dir", type=str, default=str(_REPO / "results/P2_nomask"))
-    parser.add_argument("--freeze-transition", action="store_true",
-                        help="Freeze P1 transition modules, train only adapter+action")
+    parser.add_argument("--freeze-transition", action="store_true", default=True,
+                        help="Freeze P1 transition modules (default True for Stage 6A)")
+    parser.add_argument("--no-freeze-transition", action="store_true",
+                        help="Disable freeze (Stage 6B fine-tuning)")
     parser.add_argument("--aux-weight", type=float, default=0.05,
                         help="Weight for auxiliary spatial losses in P2 (default 0.05)")
     args = parser.parse_args()
+    if args.no_freeze_transition:
+        args.freeze_transition = False
 
     accelerator = Accelerator(gradient_accumulation_steps=1, mixed_precision="bf16")
     if torch.cuda.is_available():
@@ -205,10 +209,12 @@ def main():
             gm = out.get("goal_mask_loss", torch.tensor(0)).item()
             rl = out.get("relation_loss", torch.tensor(0)).item()
             vla_unwrapped = accelerator.unwrap_model(vla)
+            vla_unwrapped = accelerator.unwrap_model(vla)
             gate = torch.tanh(vla_unwrapped.transition_action_adapter.gate).item()
+            dl = out.get("dino_future_loss", torch.tensor(0)).item()
             print(f"  Step {step:5d}: total={loss.item():.4f} action={al:.4f} "
                   f"C={cm:.4f} F={fm:.4f} G={gm:.4f} R={rl:.4f} "
-                  f"gate={gate:.4f} lr={scheduler.get_last_lr()[0]:.2e}")
+                  f"DINO={dl:.4f} gate={gate:.4f} lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
         if accelerator.is_main_process and (step + 1) % args.save_interval == 0:
