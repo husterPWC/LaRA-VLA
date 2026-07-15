@@ -652,6 +652,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 vlm_hidden = qwen_out.hidden_states[-1].float()
 
             # ── Transition with slot identity residual ──────────
+            vlm_proj = self.vlm_projector(vlm_hidden)
             B = vlm_proj.shape[0]
             q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
                       + self.transition_module.type_embedding.expand(B, -1, -1))
