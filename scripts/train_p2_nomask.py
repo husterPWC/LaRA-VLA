@@ -108,22 +108,57 @@ def main():
     p1_state = torch.load(args.p1_ckpt, map_location="cpu")
     if "p1_state_dict" in p1_state:
         p1_state = p1_state["p1_state_dict"]
-    missing, unexpected = vla.load_state_dict(p1_state, strict=False)
+
+    # Remap P1NoMaskWrapper shared mask_decoder → VLA's current_mask_decoder
+    # (P1 used shared decoder; P2 VLA has current/future/goal as separate instances)
+    remapped = {}
+    p1_aux_keys = []
+    for k, v in p1_state.items():
+        if k.startswith("mask_decoder."):
+            new_k = k.replace("mask_decoder.", "current_mask_decoder.")
+            remapped[new_k] = v
+            p1_aux_keys.append(k)
+        else:
+            remapped[k] = v
+    missing, unexpected = vla.load_state_dict(remapped, strict=False)
+
+    # Copy trained shared decoder to future/goal decoders too
+    for k, v in remapped.items():
+        if k.startswith("current_mask_decoder."):
+            fk = k.replace("current_mask_decoder.", "future_mask_decoder.")
+            gk = k.replace("current_mask_decoder.", "goal_mask_decoder.")
+            if fk in missing:
+                vla.state_dict()[fk].copy_(v)
+            if gk in missing:
+                vla.state_dict()[gk].copy_(v)
+
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
 
     if accelerator.is_main_process:
-        print(f"  P1-New weights loaded.")
-        if missing:
-            print(f"    missing keys: {len(missing)}")
-            for k in sorted(missing)[:10]:
+        print(f"  P1-New weights loaded (remapped {len(p1_aux_keys)} shared decoder keys).")
+        p1_relevant_missing = [k for k in missing if not k.startswith("action_model.")
+                               and "dino_encoder" not in k and "_distill" not in k
+                               and "posterior_encoder" not in k]
+        if p1_relevant_missing:
+            print(f"    ⚠️  P1-relevant missing: {len(p1_relevant_missing)}")
+            for k in sorted(p1_relevant_missing)[:10]:
                 print(f"      - {k}")
-        if unexpected:
-            print(f"    unexpected keys: {len(unexpected)}")
-            for k in sorted(unexpected)[:5]:
-                print(f"      + {k}")
         gamma = vla.transition_loss_weights.get("slot_residual_gamma", "N/A")
         print(f"  gamma={gamma}")
+
+    # ── P1 parity check: run one batch and print aux metrics ──
+    if accelerator.is_main_process:
+        data_iter = iter(loader)
+        pb = next(data_iter)
+        vla.eval()
+        with torch.no_grad():
+            parity = vla.forward(pb)
+        print(f"  P1 parity (after load, before P2 training):")
+        for k in ["current_mask_loss", "future_mask_loss", "goal_mask_loss",
+                  "relation_loss", "dino_future_loss", "dino_future_cos"]:
+            v = parity.get(k, torch.tensor(float("nan")))
+            print(f"    {k}: {v.item():.4f}")
 
     # ── Freeze / Unfreeze ────────────────────────────────────
     # Qwen-VL always frozen
