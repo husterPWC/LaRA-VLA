@@ -133,6 +133,12 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 num_patches=num_dino_patches,
             )
 
+            # ── Posterior teacher encoder (Step 5) ──────────
+            from laravla.model.modules.spatial_transition import PosteriorTransitionEncoder
+            self.posterior_encoder = PosteriorTransitionEncoder(
+                dino_dim=dino_dim, transition_dim=self.transition_dim,
+            )
+
             self.transition_loss_weights = trans_cfg.get("loss_weights", {
                 "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
                 "current_mask": 0.05, "dino_future": 0.05,
@@ -149,6 +155,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.transition_action_adapter = None
             self.dino_encoder = None
             self.dino_future_head = None
+            self.posterior_encoder = None
             self.transition_loss_weights = {}
 
         # Training stage control

@@ -141,31 +141,31 @@ class P1NoMaskWrapper(nn.Module):
         super().__init__()
         self.vlm_projector = vla.vlm_projector
         self.transition_module = vla.transition_module
-        # Shared mask decoder: current/future/goal all use the SAME decoder.
-        # If tokens collapse → same mask for all targets → loss forces differentiation.
         self.mask_decoder = vla.current_mask_decoder  # shared!
         self.relation_head = vla.relation_head
         self.dino_future_head = getattr(vla, 'dino_future_head', None)
+        self.posterior_encoder = getattr(vla, 'posterior_encoder', None)  # Step 5
 
         self.loss_weights = vla.transition_loss_weights
         self.mask_res = 56
-
-        # Type embedding (same param as transition_module for output reinforcement)
         self.type_embedding = self.transition_module.type_embedding
 
+        # Distill warmup tracking
+        self.register_buffer('_distill_step', torch.tensor(0, dtype=torch.long))
+
     def forward(self, vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
-                dino_future_target=None, tau_future_valid=None):
+                dino_future_target=None, tau_future_valid=None,
+                dino_cur=None):
         """
         Args:
             vlm_hidden:         [B, L, 2560] frozen Qwen-VL hidden states
-            cur_masks:          [B, 1, H, W] current mask SUPERVISION (not input!)
-            future_masks:       [B, H, W]    future mask GT (tau future or original)
+            cur_masks:          [B, 1, H, W] current mask SUPERVISION
+            future_masks:       [B, H, W]    tau future mask GT
             goal_masks:         [B, H, W]    goal mask GT
             rel_ids:            [B] LongTensor relation label ids
             dino_future_target: [B, 256, dino_dim] or None
-            tau_future_valid:   [B] bool tensor or None. If provided, masks
-                                future_mask_loss and dino_future_loss for
-                                samples where tau gap is too small.
+            tau_future_valid:   [B] bool tensor or None
+            dino_cur:           [B, 256, dino_dim] or None — current DINO for teacher
 
         Returns:
             dict with total_loss, individual losses, metrics, transition_tokens
@@ -297,6 +297,88 @@ class P1NoMaskWrapper(nn.Module):
             result["dino_future_cos"] = cos_dino
         else:
             L_dino = None
+
+        # ── Teacher branch (Step 5) ──────────────────────────────
+        # Teacher sees privileged info (DINO, masks, relation) and
+        # produces z_teacher. Student mimics it via distill loss.
+        L_teacher = torch.tensor(0.0, device=total.device)
+        L_distill = torch.tensor(0.0, device=total.device)
+        teacher_cos = torch.tensor(0.0, device=total.device)
+        teacher_metrics = {}
+
+        if self.posterior_encoder is not None and dino_future_target is not None and dino_cur is not None:
+            # --- Teacher forward ---
+            z_teacher = self.posterior_encoder(
+                dino_cur=dino_cur,
+                dino_fut=dino_future_target,
+                cur_mask=cur_masks,
+                fut_mask=future_masks.unsqueeze(1) if future_masks.dim() == 3 else future_masks,
+                goal_mask=goal_masks.unsqueeze(1) if goal_masks.dim() == 3 else goal_masks,
+                rel_id=rel_ids,
+            )  # [B, 6, D]
+
+            # Teacher decoding with SHARED heads
+            teacher_current_tokens  = z_teacher[:, 0:2, :]
+            teacher_future_tokens   = z_teacher[:, 2:4, :]
+            teacher_goal_tokens     = z_teacher[:, 4:5, :]
+            teacher_relation_tokens = z_teacher[:, 5:6, :]
+
+            t_cur_logits = self.mask_decoder(teacher_current_tokens)
+            t_fut_logits = self.mask_decoder(teacher_future_tokens)
+            t_goal_logits = self.mask_decoder(teacher_goal_tokens)
+            t_rel_logits = self.relation_head(teacher_relation_tokens)
+
+            teacher_losses = transition_total_loss(
+                current_logits=t_cur_logits, current_target=cur_gt,
+                future_logits=t_fut_logits, future_target=future_gt,
+                goal_logits=t_goal_logits, goal_target=goal_gt,
+                relation_logits=t_rel_logits, relation_target=rel_ids,
+                w_current=w.get("current_mask", 0.05),
+                w_future=w.get("future_mask", 0.05),
+                w_goal=w.get("goal_mask", 0.10),
+                w_relation=w.get("relation", 0.05),
+            )
+
+            t_dino_pred = self.dino_future_head(teacher_future_tokens)
+            t_dino_loss_val = dino_cosine_loss(t_dino_pred, dino_future_target)
+            teacher_losses["dino_future_loss"] = t_dino_loss_val
+            teacher_losses["dino_future_cos"] = dino_cosine_similarity(t_dino_pred, dino_future_target)
+            teacher_losses["total_loss"] = teacher_losses["total_loss"] + w.get("dino_future", 0.05) * t_dino_loss_val
+
+            w_teacher = w.get("teacher_loss_weight", 0.5)
+            L_teacher = w_teacher * teacher_losses["total_loss"]
+
+            # --- Distill loss ---
+            z_student_ln = F.layer_norm(transition_tokens.float(), [transition_tokens.shape[-1]])
+            z_teacher_ln = F.layer_norm(z_teacher.float(), [z_teacher.shape[-1]])
+            L_distill_raw = F.mse_loss(z_student_ln, z_teacher_ln.detach())
+
+            # Warmup schedule
+            warmup_steps = int(w.get("distill_warmup_steps", 100))
+            distill_weight = w.get("distill_weight", 0.05)
+            self._distill_step += 1
+            if self._distill_step.item() < warmup_steps:
+                ratio = self._distill_step.item() / max(warmup_steps, 1)
+                distill_weight = distill_weight * ratio
+            L_distill = distill_weight * L_distill_raw
+
+            # Cosine between student and teacher (higher = better alignment)
+            t_cos = (z_student_ln * z_teacher_ln.detach()).sum(dim=-1).mean()
+
+            total = total + L_teacher + L_distill
+
+            teacher_metrics = {
+                "teacher_total_loss": teacher_losses["total_loss"].detach(),
+                "teacher_C_dice": self._dice(t_cur_logits, cur_gt).detach(),
+                "teacher_F_dice": self._dice(t_fut_logits, future_gt).detach(),
+                "teacher_G_dice": self._dice(t_goal_logits, goal_gt).detach(),
+                "teacher_dino_cos": teacher_losses.get("dino_future_cos", torch.tensor(0.0)).detach(),
+                "distill_loss": L_distill.detach(),
+                "distill_weight": torch.tensor(distill_weight),
+                "teacher_student_cos": t_cos.detach(),
+                "teacher_pair_cos": _compute_inter_type_cos(z_teacher).detach(),
+            }
+            result.update(teacher_metrics)
 
         # ── Metrics ──────────────────────────────────────────────
         cur_dice = self._dice(current_logits, cur_gt)

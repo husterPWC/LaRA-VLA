@@ -102,7 +102,10 @@ def main():
         "mask_res": 56, "num_relation_labels": 6, "transition_dim": 512,
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
                          "current_mask": 0.05, "dino_future": 0.05,
-                         "slot_residual_gamma": args.gamma},
+                         "slot_residual_gamma": args.gamma,
+                         "distill_weight": 0.05,
+                         "distill_warmup_steps": 100,
+                         "teacher_loss_weight": 0.5},
     }
     cfg = OmegaConf.create(model_cfg)
     from laravla.model.framework import build_framework
@@ -188,30 +191,41 @@ def main():
             )
             vlm_hidden = qwen_out.hidden_states[-1]
 
-        # DINO future target: extract future RGB, run frozen DINO
+        # DINO features: current RGB + tau future RGB (teacher uses both)
         dino_future_target = None
+        dino_cur = None
         if vla.dino_encoder is not None:
+            # Current DINO (for teacher posterior)
+            cur_tensors = []
+            for s in batch:
+                arr = np.array(s["image"][0], dtype=np.uint8)
+                cur_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+            cur_rgb = torch.stack(cur_tensors).to(accelerator.device)
+            with torch.no_grad():
+                dino_cur = vla.dino_encoder(cur_rgb)
+
+            # Future DINO (for DINO loss target + teacher)
             future_imgs = [s.get(dino_image_key, None) for s in batch]
             if any(fi is not None for fi in future_imgs):
                 future_tensors = []
                 for i, fi in enumerate(future_imgs):
                     if fi is not None and isinstance(fi, list) and len(fi) > 0:
-                        fi = fi[0]  # primary view PIL
+                        fi = fi[0]
                     if fi is not None:
                         arr = np.array(fi, dtype=np.uint8)
                         future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
                     else:
-                        # Fallback: use current image
                         arr = np.array(batch[i]["image"][0], dtype=np.uint8)
                         future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
                 future_rgb = torch.stack(future_tensors).to(accelerator.device)
                 with torch.no_grad():
                     dino_future_target = vla.dino_encoder(future_rgb)
 
-        # P1 forward: transition from VLM only, supervised by all masks + DINO
+        # P1 forward: student + teacher + distill
         out = p1_model(vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
                        dino_future_target=dino_future_target,
-                       tau_future_valid=tau_valid)
+                       tau_future_valid=tau_valid,
+                       dino_cur=dino_cur)
         loss = out["total_loss"]
 
         if torch.isnan(loss):
@@ -245,11 +259,15 @@ def main():
             lnm = out.get("latent_norm_mean", torch.tensor(0)).item()
             lns = out.get("latent_norm_std", torch.tensor(0)).item()
             tv = out.get("tau_valid_ratio", torch.tensor(1.0)).item()
+            tdl = out.get("distill_loss", torch.tensor(0)).item()
+            tcos = out.get("teacher_student_cos", torch.tensor(0)).item()
+            tfl = out.get("teacher_total_loss", torch.tensor(0)).item()
             print(f"  Step {step:5d}: total={loss.item():.4f}  "
                   f"C={cm:.4f}(D{cd:.2f})  F={fm:.4f}(D{fd:.2f})  "
                   f"G={gm:.4f}(D{gd:.2f})  R={rl:.4f}(A{ra:.2f})  "
                   f"DINO={dl:.4f}(cos{dc:.2f})  τv={tv:.2f}  "
-                  f"intER={lpc:.3f} intRA={ipc:.3f} var={lv:.4f}  "
+                  f"inter={lpc:.3f} intra={ipc:.3f}  "
+                  f"distill={tdl:.4f}(tcos{tcos:.2f}) tloss={tfl:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
@@ -299,9 +317,20 @@ def main():
                             [s.get("tau_future_valid", True) for s in eb],
                             dtype=torch.bool, device=accelerator.device)
 
-                    # DINO future target for eval
+                    # DINO features for eval
                     dino_eval_target = None
+                    dino_eval_cur = None
                     if vla.dino_encoder is not None:
+                        # Current DINO
+                        ceval_tensors = []
+                        for s in eb:
+                            arr = np.array(s["image"][0], dtype=np.uint8)
+                            ceval_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                        with torch.no_grad():
+                            dino_eval_cur = vla.dino_encoder(
+                                torch.stack(ceval_tensors).to(accelerator.device))
+
+                        # Future DINO
                         feval_imgs = [s.get(dino_image_key, None) for s in eb]
                         if any(fi is not None for fi in feval_imgs):
                             feval_tensors = []
@@ -321,7 +350,8 @@ def main():
 
                     eo = p1_model(vh, cm, fm, gm, ri,
                                   dino_future_target=dino_eval_target,
-                                  tau_future_valid=eval_tau_valid)
+                                  tau_future_valid=eval_tau_valid,
+                                  dino_cur=dino_eval_cur)
                     eval_tot.append(eo["total_loss"].item())
                     eval_cd.append(eo["current_dice"].item())
                     eval_fd.append(eo["future_dice"].item())
@@ -344,7 +374,7 @@ def main():
                 print(f"  📊 Eval {step+1}: loss={avg_t:.4f}  "
                       f"C={avg_cd:.3f}  F={avg_fd:.3f}  G={avg_gd:.3f}  "
                       f"Rel={avg_ra:.3f}  DINO={avg_dl:.4f}(c{avg_dc:.2f})  "
-                      f"pair_cos={avg_lpc:.3f}")
+                      f"inter={avg_lpc:.3f}  ⇄distill")
                 metrics = {"step": step + 1, "val_loss": float(avg_t),
                           "C_Dice": float(avg_cd), "F_Dice": float(avg_fd),
                           "G_Dice": float(avg_gd), "RelAcc": float(avg_ra),

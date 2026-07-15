@@ -33,3 +33,6 @@ from laravla.model.modules.spatial_transition.spatial_dino_encoder import (
 from laravla.model.modules.spatial_transition.dino_future_head import (
     DINOFutureHead, dino_cosine_loss, dino_cosine_similarity
 )
+from laravla.model.modules.spatial_transition.posterior_encoder import (
+    PosteriorTransitionEncoder
+)
