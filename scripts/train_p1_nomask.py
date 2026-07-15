@@ -260,6 +260,7 @@ def main():
             p1_model.eval()
             eval_tot, eval_cd, eval_fd, eval_gd, eval_ra = [], [], [], [], []
             eval_dl, eval_dc = [], []
+            eval_lpc = []  # eval latent pair cos
             eval_iter = iter(loader)
             with torch.no_grad():
                 for _ in range(args.eval_batches):
@@ -325,6 +326,7 @@ def main():
                     if dino_eval_target is not None:
                         eval_dl.append(eo.get("dino_future_loss", torch.tensor(0)).item())
                         eval_dc.append(eo.get("dino_future_cos", torch.tensor(0)).item())
+                    eval_lpc.append(eo.get("latent_pair_cos", torch.tensor(0)).item())
 
             if accelerator.is_main_process:
                 avg_t = np.mean(eval_tot) if eval_tot else float("nan")
@@ -334,9 +336,11 @@ def main():
                 avg_ra = np.mean(eval_ra) if eval_ra else 0
                 avg_dl = np.mean(eval_dl) if eval_dl else 0
                 avg_dc = np.mean(eval_dc) if eval_dc else 0
+                avg_lpc = np.mean(eval_lpc) if eval_lpc else 0
                 print(f"  📊 Eval {step+1}: loss={avg_t:.4f}  "
-                      f"C-Dice={avg_cd:.3f}  F-Dice={avg_fd:.3f}  G-Dice={avg_gd:.3f}  "
-                      f"RelAcc={avg_ra:.3f}  DINO={avg_dl:.4f}(cos{avg_dc:.2f})")
+                      f"C={avg_cd:.3f}  F={avg_fd:.3f}  G={avg_gd:.3f}  "
+                      f"Rel={avg_ra:.3f}  DINO={avg_dl:.4f}(c{avg_dc:.2f})  "
+                      f"pair_cos={avg_lpc:.3f}")
                 metrics = {"step": step + 1, "val_loss": float(avg_t),
                           "C_Dice": float(avg_cd), "F_Dice": float(avg_fd),
                           "G_Dice": float(avg_gd), "RelAcc": float(avg_ra),

@@ -137,17 +137,19 @@ def transition_total_loss(
     return losses
 
 
-def token_diversity_loss(transition_tokens: torch.Tensor, weight: float = 0.005) -> torch.Tensor:
+def token_diversity_loss(transition_tokens: torch.Tensor, weight: float = 0.01,
+                         threshold: float = 0.5) -> torch.Tensor:
     """
-    Lightweight diversity regularization to prevent token collapse.
+    Diversity regularization to prevent token collapse.
 
-    Penalizes squared off-diagonal cosine similarity between transition tokens.
-    A weight of 0.001–0.005 gently pushes tokens toward distinct directions
-    without forcing strict orthogonality.
+    Uses relu(cos - threshold)² — only penalizes pairwise cosine similarities
+    above `threshold`. This allows moderate correlation between tokens
+    (they can share some information) while preventing complete collapse.
 
     Args:
         transition_tokens: [B, T, D]
-        weight: loss weight (keep small: 0.001–0.005)
+        weight: loss weight (0.01 for typed tokens, 0.005 for untyped)
+        threshold: cosine threshold above which penalty applies
 
     Returns:
         scalar loss
@@ -157,4 +159,6 @@ def token_diversity_loss(transition_tokens: torch.Tensor, weight: float = 0.005)
     T = sim.shape[1]
     mask = ~torch.eye(T, dtype=torch.bool, device=sim.device)
     off_diag = sim[:, mask]  # [B, T*(T-1)]
-    return weight * (off_diag ** 2).mean()
+    # Only penalize above threshold
+    excess = torch.nn.functional.relu(off_diag - threshold)
+    return weight * (excess ** 2).mean()

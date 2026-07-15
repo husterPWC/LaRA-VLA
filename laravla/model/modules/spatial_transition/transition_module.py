@@ -31,10 +31,12 @@ class MaskConditionedTransitionModule(nn.Module):
         self.transition_queries = nn.Parameter(
             torch.randn(1, num_transition_tokens, transition_dim) * 0.02
         )
-        # Per-token identity embedding — prevents all tokens from collapsing to
-        # the same representation (token collapse fix, Step 5 pre-fix).
-        self.token_identity = nn.Parameter(
-            torch.randn(1, num_transition_tokens, transition_dim) * 0.02
+        # Per-token type embedding — typed tokens prevent collapse by assigning
+        # different token types to different supervision heads.
+        # Initialized at 0.1 (stronger than 0.02) so token identity survives
+        # the ~22.6-norm latent space through cross-attention layers.
+        self.type_embedding = nn.Parameter(
+            torch.randn(1, num_transition_tokens, transition_dim) * 0.1
         )
 
         self.layers = nn.ModuleList()
@@ -77,8 +79,8 @@ class MaskConditionedTransitionModule(nn.Module):
             context = torch.cat([vlm_projected, mask_tokens], dim=1)
         else:
             context = vlm_projected
-        # Add per-token identity to prevent collapse (all tokens becoming identical)
-        queries = self.transition_queries.expand(B, -1, -1) + self.token_identity.expand(B, -1, -1)
+        # Add type embedding to give each token a persistent identity
+        queries = self.transition_queries.expand(B, -1, -1) + self.type_embedding.expand(B, -1, -1)
 
         for layer in self.layers:
             cross_out, _ = layer["cross_attn"](query=queries, key=context, value=context)

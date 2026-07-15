@@ -184,12 +184,20 @@ class P1NoMaskWrapper(nn.Module):
 
         # Transition: NO mask tokens — cross-attend to VLM only
         transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
+        # transition_tokens: [B, 6, 512]
+        #   [0,1] = current type  [2,3] = future type
+        #   [4]   = goal type     [5]   = relation type
 
-        # Decode all masks from transition tokens
-        current_logits = self.current_mask_decoder(transition_tokens)
-        future_logits = self.future_mask_decoder(transition_tokens)
-        goal_logits = self.goal_mask_decoder(transition_tokens)
-        rel_logits = self.relation_head(transition_tokens)
+        # ── Typed token routing: each head reads only its type ─
+        current_tokens = transition_tokens[:, 0:2, :]   # [B, 2, 512]
+        future_tokens  = transition_tokens[:, 2:4, :]   # [B, 2, 512]
+        goal_tokens    = transition_tokens[:, 4:5, :]   # [B, 1, 512]
+        relation_tokens = transition_tokens[:, 5:6, :]  # [B, 1, 512]
+
+        current_logits = self.current_mask_decoder(current_tokens)
+        future_logits  = self.future_mask_decoder(future_tokens)
+        goal_logits    = self.goal_mask_decoder(goal_tokens)
+        rel_logits     = self.relation_head(relation_tokens)
 
         # Resize GT masks to match decoder output resolution
         R = future_logits.shape[-1]
@@ -233,8 +241,8 @@ class P1NoMaskWrapper(nn.Module):
         else:
             valid_ratio = torch.tensor(1.0)
 
-        # ── Token diversity loss (anti-collapse) ──────────────
-        L_div = token_diversity_loss(transition_tokens, weight=0.005)
+        # ── Token diversity loss (anti-collapse v2) ──────────
+        L_div = token_diversity_loss(transition_tokens, weight=0.01, threshold=0.5)
 
         total = losses["total_loss"] + L_div
         result = {
@@ -248,7 +256,7 @@ class P1NoMaskWrapper(nn.Module):
 
         # ── DINO future loss (Step 3) ────────────────────────────
         if self.dino_future_head is not None and dino_future_target is not None:
-            pred_dino = self.dino_future_head(transition_tokens)          # [B, 256, dino_dim]
+            pred_dino = self.dino_future_head(future_tokens)              # [B, 256, dino_dim] (reads future type)
             L_dino = dino_cosine_loss(pred_dino, dino_future_target)      # scalar (averaged over batch)
             cos_dino = dino_cosine_similarity(pred_dino, dino_future_target)
 
