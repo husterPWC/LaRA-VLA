@@ -165,26 +165,27 @@ def main():
     for p in vla.qwen_vl_interface.parameters():
         p.requires_grad_(False)
 
-    # Step 6A: freeze P1 modules (VLM, DINO, transition, mask decoders, relation, dino head)
+    # Step 6A: freeze P1 modules + force eval mode (BatchNorm stays in eval)
     p1_modules = [vla.vlm_projector, vla.transition_module,
                    vla.current_mask_decoder, vla.relation_head,
-                   vla.dino_future_head]
+                   vla.dino_future_head, vla.dino_encoder]
     if vla.posterior_encoder is not None:
         p1_modules.append(vla.posterior_encoder)
     for m in p1_modules:
         if m is not None:
             for p in m.parameters():
                 p.requires_grad_(False)
+            m.eval()  # critical: prevent BatchNorm train-mode drift
 
-    # Freeze unused / frozen modules
+    # Freeze unused modules
     if vla.mask_token_encoder is not None:
         for p in vla.mask_token_encoder.parameters():
             p.requires_grad_(False)
+        vla.mask_token_encoder.eval()
     if vla.transition_to_action is not None:
         for p in vla.transition_to_action.parameters():
             p.requires_grad_(False)
-    for p in vla.dino_encoder.parameters():
-        p.requires_grad_(False)
+        vla.transition_to_action.eval()
 
     # Step 6A trainable: adapter + spatial projectors + action model
     for p in vla.transition_action_adapter.parameters():
@@ -197,6 +198,16 @@ def main():
             p.requires_grad_(True)
     for p in vla.action_model.parameters():
         p.requires_grad_(True)
+
+    # Override model.train() to keep P1 modules in eval mode
+    _orig_train = vla.train
+    def _train_with_frozen_eval(mode=True):
+        _orig_train(mode)
+        if mode:
+            for m in p1_modules:
+                if m is not None:
+                    m.eval()
+    vla.train = _train_with_frozen_eval.__get__(vla, type(vla))
 
     trainable = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     if accelerator.is_main_process:
@@ -255,11 +266,15 @@ def main():
             rl = out.get("relation_loss", torch.tensor(0)).item()
             vla_unwrapped = accelerator.unwrap_model(vla)
             vla_unwrapped = accelerator.unwrap_model(vla)
-            gate = torch.tanh(vla_unwrapped.transition_action_adapter.gate).item()
+            gate_raw = vla_unwrapped.transition_action_adapter.gate.item()
+            gate_act = torch.tanh(vla_unwrapped.transition_action_adapter.gate).item()
             dl = out.get("dino_future_loss", torch.tensor(0)).item()
+            ts = out.get("transition_tokens", None)
+            z_norm = ts.float().norm(dim=-1).mean().item() if ts is not None else 0
             print(f"  Step {step:5d}: total={loss.item():.4f} action={al:.4f} "
                   f"C={cm:.4f} F={fm:.4f} G={gm:.4f} R={rl:.4f} "
-                  f"DINO={dl:.4f} gate={gate:.4f} lr={scheduler.get_last_lr()[0]:.2e}")
+                  f"DINO={dl:.4f} gate_raw={gate_raw:.4f} gate_act={gate_act:.4f} "
+                  f"|z|={z_norm:.1f} lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
         if accelerator.is_main_process and (step + 1) % args.save_interval == 0:
