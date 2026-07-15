@@ -179,15 +179,25 @@ class P1NoMaskWrapper(nn.Module):
         vlm_proj = self.vlm_projector(vlm_hidden.float())
 
         # Transition: NO mask tokens — cross-attend to VLM only
+        # Slot identity residual (v4): the transition module's self-attention
+        # homogenizes token queries (q_init inter=0.001 → z_raw inter=0.88).
+        # We add the ORIGINAL diverse queries as a strong residual so token
+        # identity survives through the module.
+        B = vlm_proj.shape[0]
+        q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
+                  + self.transition_module.type_embedding.expand(B, -1, -1))
         transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
+
+        # Strong residual: LayerNorm'd original diverse queries survive.
+        # LN(q_init) normalizes each query to unit norm so the residual
+        # contribution is scale-invariant regardless of absolute norm.
+        GAMMA = 2.0
+        q_init_ln = F.layer_norm(q_init.float(), [q_init.shape[-1]])
+        z_typed = transition_tokens + GAMMA * q_init_ln
+        z_typed = F.layer_norm(z_typed.float(), [z_typed.shape[-1]])
         # transition_tokens: [B, 6, 512]
         #   [0,1] = current type  [2,3] = future type
         #   [4]   = goal type     [5]   = relation type
-
-        # ── Typed token routing + output type reinforcement ──
-        # Apply type embedding AGAIN at output (not just query input) so
-        # type identity survives the cross-attention / LayerNorm layers.
-        z_typed = transition_tokens + self.type_embedding  # [B, 6, 512]
 
         current_tokens  = z_typed[:, 0:2, :]   # [B, 2, 512]
         future_tokens   = z_typed[:, 2:4, :]   # [B, 2, 512]
