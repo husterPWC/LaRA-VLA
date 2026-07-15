@@ -19,7 +19,8 @@ from laravla.model.modules.spatial_transition.transition_decoders import (
     MaskDecoder, RelationHead, TransitionToActionProjector
 )
 from laravla.model.modules.spatial_transition.transition_action_adapter import (
-    TransitionToActionProjector, GatedTransitionActionAdapter
+    TransitionToActionProjector, GatedTransitionActionAdapter,
+    ProprioEncoder, DINOSpatialProjector
 )
 from laravla.model.modules.spatial_transition.p1_wrapper import (
     P1TransitionWrapper, P1NoMaskWrapper

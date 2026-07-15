@@ -110,17 +110,21 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.transition_to_action = TransitionToActionProjector(
                 transition_dim=self.transition_dim, vlm_dim=vlm_dim
             )
-            from laravla.model.modules.spatial_transition import GatedTransitionActionAdapter
+            from laravla.model.modules.spatial_transition import (
+                GatedTransitionActionAdapter, ProprioEncoder, DINOSpatialProjector
+            )
+            # 6 typed tokens + 2 spatial tokens (DINO subgoal + proprioception) = 8
+            adapter_num_tokens = num_transition_tokens + 2
             self.transition_action_adapter = GatedTransitionActionAdapter(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                transition_dim=self.transition_dim, num_transition_tokens=adapter_num_tokens,
                 vlm_dim=vlm_dim
             )
 
             # ── DINO encoder (frozen) + future head (trainable) ──
             dino_cfg = trans_cfg.get("dino", {})
             dino_model = dino_cfg.get("model_name", "dinov2_vitb14")
-            dino_dim = dino_cfg.get("dino_dim", 768)  # ViT-B/14
-            num_dino_patches = dino_cfg.get("num_patches", 256)  # 224/14=16, 16²=256
+            dino_dim = dino_cfg.get("dino_dim", 768)
+            num_dino_patches = dino_cfg.get("num_patches", 256)
             from laravla.model.modules.spatial_transition import (
                 SpatialDINOEncoder, DINOFutureHead
             )
@@ -131,6 +135,14 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 transition_dim=self.transition_dim,
                 dino_dim=dino_dim,
                 num_patches=num_dino_patches,
+            )
+
+            # ── Spatial stream components (Step 6A) ─────────
+            self.proprio_encoder = ProprioEncoder(
+                state_dim=7, transition_dim=self.transition_dim
+            )
+            self.dino_spatial_projector = DINOSpatialProjector(
+                dino_dim=dino_dim, transition_dim=self.transition_dim
             )
 
             # ── Posterior teacher encoder (Step 5) ──────────
@@ -156,6 +168,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.dino_encoder = None
             self.dino_future_head = None
             self.posterior_encoder = None
+            self.proprio_encoder = None
+            self.dino_spatial_projector = None
             self.transition_loss_weights = {}
 
         # Training stage control
@@ -637,20 +651,30 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 )
                 vlm_hidden = qwen_out.hidden_states[-1].float()
 
-            # ── Transition: NO mask_tokens ───────────────────────
-            vlm_proj = self.vlm_projector(vlm_hidden)
+            # ── Transition with slot identity residual ──────────
+            B = vlm_proj.shape[0]
+            q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
+                      + self.transition_module.type_embedding.expand(B, -1, -1))
             transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
+            GAMMA = w.get("slot_residual_gamma", 1.5)
+            q_init_ln = F.layer_norm(q_init.float(), [q_init.shape[-1]])
+            z_typed = transition_tokens + GAMMA * q_init_ln
+            z_typed = F.layer_norm(z_typed.float(), [z_typed.shape[-1]])
 
             # ── Auxiliary spatial losses ─────────────────────────
-            current_logits = self.current_mask_decoder(transition_tokens)
-            future_logits = self.future_mask_decoder(transition_tokens)
-            goal_logits = self.goal_mask_decoder(transition_tokens)
-            rel_logits = self.relation_head(transition_tokens)
+            current_tokens  = z_typed[:, 0:2, :]
+            future_tokens   = z_typed[:, 2:4, :]
+            goal_tokens     = z_typed[:, 4:5, :]
+            relation_tokens = z_typed[:, 5:6, :]
+
+            current_logits = self.current_mask_decoder(current_tokens)
+            future_logits = self.current_mask_decoder(future_tokens)
+            goal_logits = self.current_mask_decoder(goal_tokens)
+            rel_logits = self.relation_head(relation_tokens)
             R = future_logits.shape[-1]
             cur_gt = F.interpolate(cur_masks.float(), size=(R,R), mode='nearest').squeeze(1)
             future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
             goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
-            w = self.transition_loss_weights
             trans_losses = transition_total_loss(
                 current_logits=current_logits, current_target=cur_gt,
                 future_logits=future_logits, future_target=future_gt,
@@ -661,8 +685,43 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_goal=w.get("goal_mask",0.10),
                 w_relation=w.get("relation",0.05))
 
-            # ── Gated adapter: inject transition into action context ──
-            conditioned_vl = self.transition_action_adapter(vlm_hidden, transition_tokens)
+            # ── DINO future prediction (Step 6A: becomes spatial subgoal) ─
+            # Extract future images for DINO target
+            future_images_list = [ex.get("image_next", None) for ex in examples]
+            dino_future_loss = torch.tensor(0.0, device=vlm_hidden.device)
+            pred_dino = None
+            if self.dino_encoder is not None and self.dino_future_head is not None:
+                pred_dino = self.dino_future_head(future_tokens)  # [B, 256, 768]
+                future_tensors = []
+                for i, fi in enumerate(future_images_list):
+                    if fi is not None and isinstance(fi, list) and len(fi) > 0:
+                        fi = fi[0]
+                    if fi is not None:
+                        arr = np.array(fi, dtype=np.uint8)
+                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                    else:
+                        arr = np.array(examples[i]["image"][0], dtype=np.uint8)
+                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                future_rgb = torch.stack(future_tensors).to(vlm_hidden.device)
+                with torch.no_grad():
+                    dino_target = self.dino_encoder(future_rgb)
+                from laravla.model.modules.spatial_transition import dino_cosine_loss, dino_cosine_similarity
+                dino_future_loss = dino_cosine_loss(pred_dino, dino_target)
+
+            # ── Gated adapter with spatial stream ─────────────────
+            # Build extended tokens: 6 typed + dino_subgoal + proprio
+            ext_tokens = z_typed  # [B, 6, 512]
+            if pred_dino is not None and self.dino_spatial_projector is not None:
+                dino_spatial = self.dino_spatial_projector(pred_dino)  # [B, 1, 512]
+                ext_tokens = torch.cat([ext_tokens, dino_spatial], dim=1)
+            if state is not None and self.proprio_encoder is not None:
+                st = torch.tensor(np.array(state), device=vlm_hidden.device, dtype=vlm_hidden.dtype)
+                if st.ndim == 2:
+                    st = st.unsqueeze(1)
+                proprio_token = self.proprio_encoder(st)  # [B, 1, 512]
+                ext_tokens = torch.cat([ext_tokens, proprio_token], dim=1)
+
+            conditioned_vl = self.transition_action_adapter(vlm_hidden, ext_tokens)
 
             # ── Action loss ──────────────────────────────────────
             with torch.autocast("cuda", dtype=torch.float32):
@@ -673,18 +732,20 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 conditioned_rep = conditioned_vl.repeat(repeated_diffusion_steps, 1, 1)
                 state_rep = None
                 if state is not None:
-                    st = torch.tensor(np.array(state), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
-                    if st.ndim == 2: st = st.unsqueeze(1)
-                    state_rep = st.repeat(repeated_diffusion_steps, 1, 1)
+                    st2 = torch.tensor(np.array(state), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
+                    if st2.ndim == 2: st2 = st2.unsqueeze(1)
+                    state_rep = st2.repeat(repeated_diffusion_steps, 1, 1)
                 action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
 
+            total = action_loss + trans_losses["total_loss"] + w.get("dino_future", 0.05) * dino_future_loss
             result = {
                 "action_loss": action_loss,
+                "dino_future_loss": dino_future_loss.detach(),
                 "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
                 "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
                 "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),
                 "relation_loss": trans_losses.get("relation_loss", torch.tensor(0.0)),
-                "total_loss": action_loss + trans_losses["total_loss"],
+                "total_loss": total,
                 "transition_tokens": transition_tokens,
             }
             return result
@@ -968,7 +1029,33 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         state_t = torch.from_numpy(np.array(state)).to(last_hidden.device, dtype=last_hidden.dtype) if state is not None else None
         if state_t is not None and state_t.ndim == 2:
             state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
-        # Step 4: Action Expert Forward and Loss
+
+        # ── Spatial stream conditioning (Step 6A) ──────────────
+        if self.transition_enabled and self.transition_module is not None:
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                vlm_proj = self.vlm_projector(last_hidden.float())
+                B = vlm_proj.shape[0]
+                q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
+                          + self.transition_module.type_embedding.expand(B, -1, -1))
+                z_raw = self.transition_module(vlm_proj, mask_tokens=None)
+                GAMMA = self.transition_loss_weights.get("slot_residual_gamma", 1.5)
+                q_init_ln = torch.nn.functional.layer_norm(q_init.float(), [q_init.shape[-1]])
+                transition_tokens = torch.nn.functional.layer_norm(
+                    z_raw.float() + GAMMA * q_init_ln, [z_raw.shape[-1]])
+
+                # Build extended tokens: z_student + DINO subgoal + proprio
+                ext_tokens = transition_tokens  # [B, 6, 512]
+                if self.dino_future_head is not None:
+                    future_tokens = transition_tokens[:, 2:4, :]
+                    pred_dino = self.dino_future_head(future_tokens)  # [B, 256, 768]
+                    if self.dino_spatial_projector is not None:
+                        ext_tokens = torch.cat([ext_tokens, self.dino_spatial_projector(pred_dino)], dim=1)
+                if state_t is not None and self.proprio_encoder is not None:
+                    ext_tokens = torch.cat([ext_tokens, self.proprio_encoder(state_t)], dim=1)
+
+                last_hidden = self.transition_action_adapter(last_hidden, ext_tokens)
+
+        # Step 4: Action Expert Forward
         with torch.autocast("cuda", dtype=torch.float32):
             pred_actions = self.action_model.predict_action(
                 last_hidden,

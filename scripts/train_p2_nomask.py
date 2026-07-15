@@ -93,7 +93,8 @@ def main():
         "enable": True, "num_mask_tokens": 8, "num_transition_tokens": 6,
         "mask_res": 56, "num_relation_labels": 7, "transition_dim": 512,
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
-                         "current_mask": 0.05},
+                         "current_mask": 0.05, "dino_future": 0.05,
+                         "slot_residual_gamma": 1.5},
     }
     from laravla.model.framework import build_framework
     vla = build_framework(OmegaConf.create(model_cfg))
@@ -115,30 +116,36 @@ def main():
     for p in vla.qwen_vl_interface.parameters():
         p.requires_grad_(False)
 
-    # P1 transition modules (NOT including mask_token_encoder — unused)
+    # Step 6A: freeze P1 modules (VLM, DINO, transition, mask decoders, relation, dino head)
     p1_modules = [vla.vlm_projector, vla.transition_module,
-                   vla.current_mask_decoder, vla.future_mask_decoder,
-                   vla.goal_mask_decoder, vla.relation_head]
-    if args.freeze_transition:
-        for m in p1_modules:
+                   vla.current_mask_decoder, vla.relation_head,
+                   vla.dino_future_head]
+    if vla.posterior_encoder is not None:
+        p1_modules.append(vla.posterior_encoder)
+    for m in p1_modules:
+        if m is not None:
             for p in m.parameters():
                 p.requires_grad_(False)
-    else:
-        for m in p1_modules:
-            for p in m.parameters():
-                p.requires_grad_(True)
 
-    # Freeze unused modules
+    # Freeze unused / frozen modules
     if vla.mask_token_encoder is not None:
         for p in vla.mask_token_encoder.parameters():
             p.requires_grad_(False)
     if vla.transition_to_action is not None:
         for p in vla.transition_to_action.parameters():
             p.requires_grad_(False)
+    for p in vla.dino_encoder.parameters():
+        p.requires_grad_(False)
 
-    # Adapter + action model always trainable
+    # Step 6A trainable: adapter + spatial projectors + action model
     for p in vla.transition_action_adapter.parameters():
         p.requires_grad_(True)
+    if vla.proprio_encoder is not None:
+        for p in vla.proprio_encoder.parameters():
+            p.requires_grad_(True)
+    if vla.dino_spatial_projector is not None:
+        for p in vla.dino_spatial_projector.parameters():
+            p.requires_grad_(True)
     for p in vla.action_model.parameters():
         p.requires_grad_(True)
 

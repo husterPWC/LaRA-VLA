@@ -1,10 +1,10 @@
 """
-Gated Transition Action Adapter.
-=================================
-Injects bottleneck transition tokens into the VLM action context
-via a gated cross-attention residual.
+Gated Transition Action Adapter (Step 6A: + spatial stream).
+==============================================================
+Injects bottleneck transition tokens + predicted DINO subgoal +
+proprioception into the VLM action context via gated cross-attention.
 
-    conditioned_vl_embs = vl_embs + tanh(gate) * CrossAttn(q=vl_embs, kv=proj_transition)
+    conditioned_vl_embs = vl_embs + tanh(gate) * CrossAttn(q=vl_embs, kv=proj_all)
 
 Gate initialized near zero → initial behavior ≈ original LaRA-VLA action_only.
 """
@@ -14,7 +14,7 @@ import torch.nn as nn
 
 
 class TransitionToActionProjector(nn.Module):
-    """Project bottleneck transition tokens [B, Kt, 512] → [B, Kt, 2560]."""
+    """Project tokens [B, Kt, Dt] → [B, Kt, Dvlm]. Kt is dynamic (6 or 8)."""
 
     def __init__(self, transition_dim: int = 512, num_tokens: int = 6, vlm_dim: int = 2560):
         super().__init__()
@@ -25,12 +25,46 @@ class TransitionToActionProjector(nn.Module):
         return self.project(transition_tokens)
 
 
+class ProprioEncoder(nn.Module):
+    """Encode proprioception [B, 7] → [B, 1, transition_dim]."""
+
+    def __init__(self, state_dim: int = 7, transition_dim: int = 512):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(state_dim, transition_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(transition_dim // 2, transition_dim),
+            nn.LayerNorm(transition_dim),
+        )
+
+    def forward(self, state):
+        """[B, D_state] → [B, 1, transition_dim]"""
+        if state.dim() == 3:
+            state = state.squeeze(1)  # [B, 1, D] → [B, D]
+        return self.encoder(state.float()).unsqueeze(1)
+
+
+class DINOSpatialProjector(nn.Module):
+    """Project predicted future DINO features → [B, 1, transition_dim]."""
+
+    def __init__(self, dino_dim: int = 768, transition_dim: int = 512):
+        super().__init__()
+        self.project = nn.Sequential(
+            nn.Linear(dino_dim, transition_dim),
+            nn.LayerNorm(transition_dim),
+        )
+
+    def forward(self, pred_future_dino):
+        """[B, K, dino_dim] → mean pool → [B, 1, transition_dim]"""
+        return self.project(pred_future_dino.mean(dim=1)).unsqueeze(1)
+
+
 class GatedTransitionActionAdapter(nn.Module):
     """
-    Inject transition tokens into VLM action context via gated cross-attention.
+    Inject transition tokens + spatial tokens into VLM action context.
 
     vl_embs:            [B, L, 2560]  — original VLM hidden states
-    transition_tokens:  [B, Kt, 512]  — bottleneck transition tokens
+    transition_tokens:  [B, Kt, 512]  — transition + spatial tokens (6 or 8)
 
     Returns conditioned_vl_embs: [B, L, 2560]
     """
@@ -38,7 +72,7 @@ class GatedTransitionActionAdapter(nn.Module):
     def __init__(
         self,
         transition_dim: int = 512,
-        num_transition_tokens: int = 6,
+        num_transition_tokens: int = 8,  # 6 typed + 2 spatial (Step 6A)
         vlm_dim: int = 2560,
         num_heads: int = 8,
         dropout: float = 0.1,
@@ -51,27 +85,19 @@ class GatedTransitionActionAdapter(nn.Module):
             vlm_dim, num_heads, dropout=dropout, batch_first=True
         )
         self.attn_norm = nn.LayerNorm(vlm_dim)
-        # Gate: initialized near zero so initial behavior ≈ original action_only
         self.gate = nn.Parameter(torch.zeros(1))
 
     def forward(self, vl_embs, transition_tokens):
         """
         Args:
             vl_embs:           [B, L, 2560]
-            transition_tokens: [B, Kt, 512]
+            transition_tokens: [B, Kt, 512]  (6 typed + optionally 2 spatial)
 
         Returns:
             conditioned_vl_embs: [B, L, 2560]
         """
-        # Project transition tokens to VLM dim
         proj = self.projector(transition_tokens)  # [B, Kt, 2560]
-
-        # Cross-attention: vl_embs attends to transition tokens
-        attn_out, _ = self.cross_attn(
-            query=vl_embs, key=proj, value=proj
-        )
+        attn_out, _ = self.cross_attn(query=vl_embs, key=proj, value=proj)
         attn_out = self.attn_norm(attn_out)
-
-        # Gated residual
-        gate_val = torch.tanh(self.gate)  # ≈ 0 initially
+        gate_val = torch.tanh(self.gate)
         return vl_embs + gate_val * attn_out
