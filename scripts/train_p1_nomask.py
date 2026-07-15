@@ -55,6 +55,8 @@ def main():
         help="Use fixed-τ future for masks and DINO target (Step 4)")
     parser.add_argument("--no-tau-future", action="store_true",
         help="Disable tau future (use original CoT future)")
+    parser.add_argument("--gamma", type=float, default=2.0,
+                        help="Slot identity residual gamma (try 1.0, 1.5, 2.0)")
     args = parser.parse_args()
 
     if args.no_tau_future:
@@ -99,7 +101,8 @@ def main():
         "enable": True, "num_mask_tokens": 8, "num_transition_tokens": 6,
         "mask_res": 56, "num_relation_labels": 6, "transition_dim": 512,
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
-                         "current_mask": 0.05, "dino_future": 0.05},
+                         "current_mask": 0.05, "dino_future": 0.05,
+                         "slot_residual_gamma": args.gamma},
     }
     cfg = OmegaConf.create(model_cfg)
     from laravla.model.framework import build_framework

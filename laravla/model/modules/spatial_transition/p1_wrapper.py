@@ -189,9 +189,9 @@ class P1NoMaskWrapper(nn.Module):
         transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
 
         # Strong residual: LayerNorm'd original diverse queries survive.
-        # LN(q_init) normalizes each query to unit norm so the residual
+        # LN(q_init) normalizes each query to ~unit norm so the residual
         # contribution is scale-invariant regardless of absolute norm.
-        GAMMA = 2.0
+        GAMMA = self.loss_weights.get("slot_residual_gamma", 2.0)
         q_init_ln = F.layer_norm(q_init.float(), [q_init.shape[-1]])
         z_typed = transition_tokens + GAMMA * q_init_ln
         z_typed = F.layer_norm(z_typed.float(), [z_typed.shape[-1]])
