@@ -37,7 +37,7 @@ class PosteriorTransitionEncoder(nn.Module):
     """
 
     def __init__(self, dino_dim=768, transition_dim=512, mask_size=224,
-                 num_relation_labels=6):
+                 num_relation_labels=7):
         super().__init__()
         self.transition_dim = transition_dim
 

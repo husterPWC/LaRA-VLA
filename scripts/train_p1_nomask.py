@@ -99,7 +99,7 @@ def main():
     model_cfg, _ = read_mode_config(Path(CKPT))
     model_cfg["framework"]["mask_conditioned_transition"] = {
         "enable": True, "num_mask_tokens": 8, "num_transition_tokens": 6,
-        "mask_res": 56, "num_relation_labels": 6, "transition_dim": 512,
+        "mask_res": 56, "num_relation_labels": 7, "transition_dim": 512,
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
                          "current_mask": 0.05, "dino_future": 0.05,
                          "slot_residual_gamma": args.gamma,

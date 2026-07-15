@@ -81,7 +81,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.transition_dim = trans_cfg.get("transition_dim", 512)
             num_mask_tokens = trans_cfg.get("num_mask_tokens", 8)
             num_transition_tokens = trans_cfg.get("num_transition_tokens", 6)
-            num_relation_labels = trans_cfg.get("num_relation_labels", 6)
+            num_relation_labels = trans_cfg.get("num_relation_labels", 7)  # 0-6: 7 classes
 
             self.vlm_projector = VLMProjector(vlm_dim=vlm_dim, transition_dim=self.transition_dim)
             self.mask_token_encoder = MaskTokenEncoder(

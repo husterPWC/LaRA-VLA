@@ -87,31 +87,26 @@ class SpatialDINOEncoder(nn.Module):
         self.model_name = model_name
         self._do_normalize = normalize
 
-        # Load DINOv2 — use local cache when GitHub is unreachable
+        # Load DINOv2 from local cache (no network dependency)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=".*xFormers.*")
-            if cache_dir is not None:
-                torch.hub.set_dir(cache_dir)
-            try:
+            hub_dir = cache_dir or torch.hub.get_dir()
+            local_repo = os.path.join(hub_dir, "facebookresearch_dinov2_main")
+            if os.path.isdir(local_repo):
+                self.model = torch.hub.load(
+                    local_repo, model_name, source="local",
+                    pretrained=False, skip_validation=True,
+                )
+            else:
+                # Fallback: try GitHub (may hang if unreachable)
+                if cache_dir is not None:
+                    torch.hub.set_dir(cache_dir)
                 self.model = torch.hub.load(
                     "facebookresearch/dinov2",
                     model_name,
                     pretrained=False,
                     skip_validation=True,
                 )
-            except Exception:
-                # GitHub unreachable — load from local cache
-                hub_dir = torch.hub.get_dir()
-                local_repo = os.path.join(hub_dir, "facebookresearch_dinov2_main")
-                if os.path.isdir(local_repo):
-                    self.model = torch.hub.load(
-                        local_repo, model_name, source="local",
-                        pretrained=False, skip_validation=True,
-                    )
-                else:
-                    raise RuntimeError(
-                        f"Cannot load DINOv2: GitHub unreachable and no local cache at {local_repo}"
-                    )
 
         if freeze:
             for p in self.model.parameters():
