@@ -108,12 +108,22 @@ def main():
     p1_state = torch.load(args.p1_ckpt, map_location="cpu")
     if "p1_state_dict" in p1_state:
         p1_state = p1_state["p1_state_dict"]
-    vla.load_state_dict(p1_state, strict=False)
+    missing, unexpected = vla.load_state_dict(p1_state, strict=False)
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
 
     if accelerator.is_main_process:
-        print("  P1-New weights loaded.")
+        print(f"  P1-New weights loaded.")
+        if missing:
+            print(f"    missing keys: {len(missing)}")
+            for k in sorted(missing)[:10]:
+                print(f"      - {k}")
+        if unexpected:
+            print(f"    unexpected keys: {len(unexpected)}")
+            for k in sorted(unexpected)[:5]:
+                print(f"      + {k}")
+        gamma = vla.transition_loss_weights.get("slot_residual_gamma", "N/A")
+        print(f"  gamma={gamma}")
 
     # ── Freeze / Unfreeze ────────────────────────────────────
     # Qwen-VL always frozen

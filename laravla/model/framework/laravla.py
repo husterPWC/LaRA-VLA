@@ -627,13 +627,14 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             from laravla.model.modules.spatial_transition import transition_total_loss
             import torch.nn.functional as F
 
-            # ── Extract supervision masks ────────────────────────
+            # ── Extract supervision masks (tau future, same as P1) ─
             cur_masks = torch.from_numpy(
                 np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
             ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()
             future_masks = torch.from_numpy(
-                np.stack([ex.get("future_affordance_mask_agentview",
-                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+                np.stack([ex.get("future_tau_mask_agentview",
+                                 ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32))) for ex in examples])
             ).to(self.qwen_vl_interface.model.device).float()
             goal_masks = torch.from_numpy(
                 np.stack([ex.get("goal_affordance_mask_agentview",
@@ -687,9 +688,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_goal=w.get("goal_mask",0.10),
                 w_relation=w.get("relation",0.05))
 
-            # ── DINO future prediction (Step 6A: becomes spatial subgoal) ─
-            # Extract future images for DINO target
-            future_images_list = [ex.get("image_next", None) for ex in examples]
+            # ── DINO future prediction (Step 6A: tau future, same as P1) ─
+            future_images_list = [ex.get("image_tau_future",
+                                         ex.get("image_next", None)) for ex in examples]
             dino_future_loss = torch.tensor(0.0, device=vlm_hidden.device)
             pred_dino = None
             if self.dino_encoder is not None and self.dino_future_head is not None:
