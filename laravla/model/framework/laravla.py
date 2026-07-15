@@ -115,9 +115,27 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
                 vlm_dim=vlm_dim
             )
+
+            # ── DINO encoder (frozen) + future head (trainable) ──
+            dino_cfg = trans_cfg.get("dino", {})
+            dino_model = dino_cfg.get("model_name", "dinov2_vitb14")
+            dino_dim = dino_cfg.get("dino_dim", 768)  # ViT-B/14
+            num_dino_patches = dino_cfg.get("num_patches", 256)  # 224/14=16, 16²=256
+            from laravla.model.modules.spatial_transition import (
+                SpatialDINOEncoder, DINOFutureHead
+            )
+            self.dino_encoder = SpatialDINOEncoder(
+                model_name=dino_model, freeze=True
+            )
+            self.dino_future_head = DINOFutureHead(
+                transition_dim=self.transition_dim,
+                dino_dim=dino_dim,
+                num_patches=num_dino_patches,
+            )
+
             self.transition_loss_weights = trans_cfg.get("loss_weights", {
                 "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
-                "current_mask": 0.05,
+                "current_mask": 0.05, "dino_future": 0.05,
             })
         else:
             self.vlm_projector = None
@@ -129,6 +147,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.relation_head = None
             self.transition_to_action = None
             self.transition_action_adapter = None
+            self.dino_encoder = None
+            self.dino_future_head = None
             self.transition_loss_weights = {}
 
         # Training stage control
@@ -532,6 +552,47 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_relation=w.get("relation", 0.05),
             )
 
+            # ── DINO future loss (Step 3) ─────────────────────
+            total = losses["total_loss"]
+            if self.dino_encoder is not None and self.dino_future_head is not None:
+                from laravla.model.modules.spatial_transition import (
+                    dino_cosine_loss, dino_cosine_similarity
+                )
+                # Extract future RGB images from batch
+                future_images_list = [ex.get("image_next", None) for ex in examples]
+                if any(fi is not None for fi in future_images_list):
+                    # Convert PIL → tensor [B, 3, 224, 224]
+                    future_tensors = []
+                    for fi in future_images_list:
+                        if fi is not None and isinstance(fi, list) and len(fi) > 0:
+                            fi = fi[0]  # primary view
+                        if fi is not None:
+                            arr = np.array(fi, dtype=np.uint8)
+                            future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                        else:
+                            # Fallback: use current image (degrade gracefully)
+                            arr = np.array(examples[future_images_list.index(fi)]["image"][0], dtype=np.uint8)
+                            future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                    future_rgb = torch.stack(future_tensors).to(
+                        self.qwen_vl_interface.model.device
+                    )  # [B, 3, 224, 224]
+
+                    # Frozen DINO → future target
+                    with torch.no_grad():
+                        dino_target = self.dino_encoder(future_rgb)  # [B, 256, 768]
+
+                    # Predict future DINO from transition tokens
+                    pred_dino = self.dino_future_head(transition_tokens)  # [B, 256, 768]
+
+                    L_dino = dino_cosine_loss(pred_dino, dino_target)
+                    cos_dino = dino_cosine_similarity(pred_dino, dino_target)
+
+                    w_dino = w.get("dino_future", 0.05)
+                    total = total + w_dino * L_dino
+                    losses["dino_future_loss"] = L_dino
+                    losses["dino_future_cos"] = cos_dino
+
+            losses["total_loss"] = total
             losses["transition_tokens"] = transition_tokens
             return losses
 

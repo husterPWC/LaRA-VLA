@@ -108,7 +108,7 @@ class SpatialCoTLiberoAdapter(Dataset):
             "relation_subject": s.get("relation_subject", ""),
             "relation_object": s.get("relation_object", ""),
 
-            # Image next (LaRA-VLA original)
+            # Image next (LaRA-VLA original, CoT-semantic future)
             "image_next": [img_next_pil] if img_next_pil is not None else None,
             "image_next_fallback": img_next_pil is None,
 
@@ -121,6 +121,40 @@ class SpatialCoTLiberoAdapter(Dataset):
             "hdf5_future_idx": s.get("hdf5_future_idx", -1),
             "mask_mode": s.get("mask_mode", ""),
         }
+
+        # ── Fixed-τ future fields (Step 4, V4+ index) ──────────
+        # Read from entry directly — base dataset doesn't pass these through.
+        entry = self._ds.entries[idx]
+        tau_idx = entry.get("hdf5_tau_future_idx")
+        tau_valid = entry.get("tau_future_valid", True)
+        orig_future_idx = sample.get("hdf5_future_idx", -1)
+
+        # Default: fallback to CoT future
+        image_tau = sample["image_next"]
+        tau_mask = sample["future_affordance_mask_agentview"].copy()
+        sample["hdf5_tau_future_idx"] = orig_future_idx
+
+        # Override with tau future if available and different from CoT future
+        if tau_idx is not None and tau_idx != orig_future_idx:
+            ep_path = entry.get("episode_path", "")
+            if ep_path:
+                try:
+                    data = self._ds._load_episode(ep_path)
+                    T = data["rgb_agentview"].shape[0]
+                    tc = min(int(tau_idx), T - 1)
+
+                    img_np = data["rgb_agentview"][tc]
+                    image_tau = [numpy_to_pil(
+                        np.transpose(img_np, (2, 0, 1)).astype(np.float32) / 255.0
+                    )]
+                    tau_mask = data["affordance_mask_agentview"][tc:tc+1].astype(np.float32).squeeze(0)
+                    sample["hdf5_tau_future_idx"] = tc
+                except Exception:
+                    pass
+
+        sample["image_tau_future"] = image_tau
+        sample["tau_future_valid"] = bool(tau_valid)
+        sample["future_tau_mask_agentview"] = tau_mask
 
         return sample
 

@@ -135,3 +135,26 @@ def transition_total_loss(
 
     losses["total_loss"] = total
     return losses
+
+
+def token_diversity_loss(transition_tokens: torch.Tensor, weight: float = 0.005) -> torch.Tensor:
+    """
+    Lightweight diversity regularization to prevent token collapse.
+
+    Penalizes squared off-diagonal cosine similarity between transition tokens.
+    A weight of 0.001–0.005 gently pushes tokens toward distinct directions
+    without forcing strict orthogonality.
+
+    Args:
+        transition_tokens: [B, T, D]
+        weight: loss weight (keep small: 0.001–0.005)
+
+    Returns:
+        scalar loss
+    """
+    z_n = torch.nn.functional.normalize(transition_tokens.float(), dim=-1)  # [B, T, D]
+    sim = z_n @ z_n.transpose(1, 2)  # [B, T, T]
+    T = sim.shape[1]
+    mask = ~torch.eye(T, dtype=torch.bool, device=sim.device)
+    off_diag = sim[:, mask]  # [B, T*(T-1)]
+    return weight * (off_diag ** 2).mean()

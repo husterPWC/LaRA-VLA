@@ -31,6 +31,11 @@ class MaskConditionedTransitionModule(nn.Module):
         self.transition_queries = nn.Parameter(
             torch.randn(1, num_transition_tokens, transition_dim) * 0.02
         )
+        # Per-token identity embedding — prevents all tokens from collapsing to
+        # the same representation (token collapse fix, Step 5 pre-fix).
+        self.token_identity = nn.Parameter(
+            torch.randn(1, num_transition_tokens, transition_dim) * 0.02
+        )
 
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
@@ -72,7 +77,8 @@ class MaskConditionedTransitionModule(nn.Module):
             context = torch.cat([vlm_projected, mask_tokens], dim=1)
         else:
             context = vlm_projected
-        queries = self.transition_queries.expand(B, -1, -1)
+        # Add per-token identity to prevent collapse (all tokens becoming identical)
+        queries = self.transition_queries.expand(B, -1, -1) + self.token_identity.expand(B, -1, -1)
 
         for layer in self.layers:
             cross_out, _ = layer["cross_attn"](query=queries, key=context, value=context)
