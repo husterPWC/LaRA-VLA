@@ -142,7 +142,7 @@ def main():
 
     # ── Training ────────────────────────────────────────────
     data_iter = iter(loader)
-    best_eval = float("inf")
+    best_eval = float("-inf")  # student_score: higher is better
     t0 = time.time()
 
     for step in range(args.max_steps):
@@ -261,13 +261,17 @@ def main():
             tv = out.get("tau_valid_ratio", torch.tensor(1.0)).item()
             tdl = out.get("distill_loss", torch.tensor(0)).item()
             tcos = out.get("teacher_student_cos", torch.tensor(0)).item()
-            tfl = out.get("teacher_total_loss", torch.tensor(0)).item()
-            print(f"  Step {step:5d}: total={loss.item():.4f}  "
-                  f"C={cm:.4f}(D{cd:.2f})  F={fm:.4f}(D{fd:.2f})  "
-                  f"G={gm:.4f}(D{gd:.2f})  R={rl:.4f}(A{ra:.2f})  "
-                  f"DINO={dl:.4f}(cos{dc:.2f})  τv={tv:.2f}  "
-                  f"inter={lpc:.3f} intra={ipc:.3f}  "
-                  f"distill={tdl:.4f}(tcos{tcos:.2f}) tloss={tfl:.4f}  "
+            tC = out.get("teacher_C_dice", torch.tensor(0)).item()
+            tF = out.get("teacher_F_dice", torch.tensor(0)).item()
+            tG = out.get("teacher_G_dice", torch.tensor(0)).item()
+            tR = out.get("teacher_RelAcc", torch.tensor(0)).item()
+            tDC = out.get("teacher_dino_cos", torch.tensor(0)).item()
+            dw = out.get("distill_weight", torch.tensor(0)).item()
+            print(f"  Step {step:5d}: total={loss.item():.4f} (S) "
+                  f"C={cm:.4f}(D{cd:.2f}) F={fm:.4f}(D{fd:.2f}) G={gm:.4f}(D{gd:.2f}) "
+                  f"R={rl:.4f}(A{ra:.2f}) DINO={dl:.4f}(cos{dc:.2f})  τv={tv:.2f}  "
+                  f"inter={lpc:.3f}  |  (T) C={tC:.2f} F={tF:.2f} G={tG:.2f} R={tR:.2f} Dc={tDC:.2f}  "
+                  f"distill={tdl:.4f}(cos{tcos:.3f} dw{dw:.3f})  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
@@ -282,7 +286,8 @@ def main():
             p1_model.eval()
             eval_tot, eval_cd, eval_fd, eval_gd, eval_ra = [], [], [], [], []
             eval_dl, eval_dc = [], []
-            eval_lpc = []  # eval latent pair cos
+            eval_lpc = []
+            eval_tcd, eval_tfd, eval_tgd, eval_tra, eval_tdc = [], [], [], [], []  # teacher
             eval_iter = iter(loader)
             with torch.no_grad():
                 for _ in range(args.eval_batches):
@@ -361,6 +366,12 @@ def main():
                         eval_dl.append(eo.get("dino_future_loss", torch.tensor(0)).item())
                         eval_dc.append(eo.get("dino_future_cos", torch.tensor(0)).item())
                     eval_lpc.append(eo.get("latent_pair_cos", torch.tensor(0)).item())
+                    # Teacher eval
+                    eval_tcd.append(eo.get("teacher_C_dice", torch.tensor(0)).item())
+                    eval_tfd.append(eo.get("teacher_F_dice", torch.tensor(0)).item())
+                    eval_tgd.append(eo.get("teacher_G_dice", torch.tensor(0)).item())
+                    eval_tra.append(eo.get("teacher_RelAcc", torch.tensor(0)).item())
+                    eval_tdc.append(eo.get("teacher_dino_cos", torch.tensor(0)).item())
 
             if accelerator.is_main_process:
                 avg_t = np.mean(eval_tot) if eval_tot else float("nan")
@@ -371,21 +382,39 @@ def main():
                 avg_dl = np.mean(eval_dl) if eval_dl else 0
                 avg_dc = np.mean(eval_dc) if eval_dc else 0
                 avg_lpc = np.mean(eval_lpc) if eval_lpc else 0
-                print(f"  📊 Eval {step+1}: loss={avg_t:.4f}  "
-                      f"C={avg_cd:.3f}  F={avg_fd:.3f}  G={avg_gd:.3f}  "
-                      f"Rel={avg_ra:.3f}  DINO={avg_dl:.4f}(c{avg_dc:.2f})  "
-                      f"inter={avg_lpc:.3f}  ⇄distill")
+                avg_tcd = np.mean(eval_tcd) if eval_tcd else 0
+                avg_tfd = np.mean(eval_tfd) if eval_tfd else 0
+                avg_tgd = np.mean(eval_tgd) if eval_tgd else 0
+                avg_tra = np.mean(eval_tra) if eval_tra else 0
+                avg_tdc = np.mean(eval_tdc) if eval_tdc else 0
+
+                student_score = (avg_cd + avg_fd + avg_gd) / 3 + 0.2 * avg_ra + 0.2 * avg_dc
+
+                print(f"  📊 Eval {step+1}: Student "
+                      f"C={avg_cd:.3f} F={avg_fd:.3f} G={avg_gd:.3f} "
+                      f"Rel={avg_ra:.3f} Dc={avg_dc:.2f} inter={avg_lpc:.3f} "
+                      f"score={student_score:.3f}  |  Teacher "
+                      f"C={avg_tcd:.3f} F={avg_tfd:.3f} G={avg_tgd:.3f} "
+                      f"Rel={avg_tra:.3f} Dc={avg_tdc:.2f}")
                 metrics = {"step": step + 1, "val_loss": float(avg_t),
+                          "student_score": float(student_score),
                           "C_Dice": float(avg_cd), "F_Dice": float(avg_fd),
                           "G_Dice": float(avg_gd), "RelAcc": float(avg_ra),
-                          "DINO_loss": float(avg_dl), "DINO_cos": float(avg_dc)}
+                          "DINO_loss": float(avg_dl), "DINO_cos": float(avg_dc),
+                          "pair_cos": float(avg_lpc),
+                          "teacher_C": float(avg_tcd), "teacher_F": float(avg_tfd),
+                          "teacher_G": float(avg_tgd), "teacher_Rel": float(avg_tra),
+                          "teacher_Dc": float(avg_tdc)}
                 with open(output_dir / "metrics.jsonl", "a") as f:
                     f.write(json.dumps(metrics) + "\n")
-                if avg_t < best_eval:
-                    best_eval = avg_t
+                # Best by student_score (not total loss which includes teacher+distill)
+                if student_score > best_eval:
+                    best_eval = student_score
                     unwrapped = accelerator.unwrap_model(p1_model)
                     torch.save({"p1_state_dict": unwrapped.state_dict()}, str(output_dir / "best_model.pt"))
-                    print(f"  🏆 Best saved (val={best_eval:.4f})")
+                    torch.save({"p1_state_dict": unwrapped.state_dict()},
+                               str(output_dir / "best_student.pt"))
+                    print(f"  🏆 Best student (score={student_score:.4f})")
 
     # ── Final ───────────────────────────────────────────────
     accelerator.wait_for_everyone()

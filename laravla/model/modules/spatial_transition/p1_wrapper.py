@@ -349,9 +349,10 @@ class P1NoMaskWrapper(nn.Module):
             L_teacher = w_teacher * teacher_losses["total_loss"]
 
             # --- Distill loss ---
-            z_student_ln = F.layer_norm(transition_tokens.float(), [transition_tokens.shape[-1]])
-            z_teacher_ln = F.layer_norm(z_teacher.float(), [z_teacher.shape[-1]])
-            L_distill_raw = F.mse_loss(z_student_ln, z_teacher_ln.detach())
+            # Use L2-normalize (not LayerNorm) so cosine is bounded [-1,1]
+            z_student_n = F.normalize(transition_tokens.float(), dim=-1)
+            z_teacher_n = F.normalize(z_teacher.float(), dim=-1)
+            L_distill_raw = F.mse_loss(z_student_n, z_teacher_n.detach())
 
             # Warmup schedule
             warmup_steps = int(w.get("distill_warmup_steps", 100))
@@ -362,21 +363,31 @@ class P1NoMaskWrapper(nn.Module):
                 distill_weight = distill_weight * ratio
             L_distill = distill_weight * L_distill_raw
 
-            # Cosine between student and teacher (higher = better alignment)
-            t_cos = (z_student_ln * z_teacher_ln.detach()).sum(dim=-1).mean()
+            # Cosine between student and teacher (range [-1,1], higher = better)
+            teacher_student_cos = (z_student_n * z_teacher_n.detach()).sum(dim=-1).mean()
 
             total = total + L_teacher + L_distill
 
+            # Teacher metrics
+            teacher_C = self._dice(t_cur_logits, cur_gt).detach()
+            teacher_F = self._dice(t_fut_logits, future_gt).detach()
+            teacher_G = self._dice(t_goal_logits, goal_gt).detach()
+            t_rel_pred = t_rel_logits.argmax(dim=1)
+            t_valid = (rel_ids >= 0) & (rel_ids < t_rel_logits.shape[1])
+            teacher_Rel = (t_rel_pred[t_valid] == rel_ids[t_valid]).float().mean() if t_valid.any() else torch.tensor(0.0)
+
             teacher_metrics = {
+                "teacher_C_dice": teacher_C,
+                "teacher_F_dice": teacher_F,
+                "teacher_G_dice": teacher_G,
+                "teacher_RelAcc": teacher_Rel.detach() if isinstance(teacher_Rel, torch.Tensor) else teacher_Rel,
                 "teacher_total_loss": teacher_losses["total_loss"].detach(),
-                "teacher_C_dice": self._dice(t_cur_logits, cur_gt).detach(),
-                "teacher_F_dice": self._dice(t_fut_logits, future_gt).detach(),
-                "teacher_G_dice": self._dice(t_goal_logits, goal_gt).detach(),
                 "teacher_dino_cos": teacher_losses.get("dino_future_cos", torch.tensor(0.0)).detach(),
+                "teacher_pair_cos": _compute_inter_type_cos(z_teacher).detach(),
+                "distill_loss_raw": L_distill_raw.detach(),
                 "distill_loss": L_distill.detach(),
                 "distill_weight": torch.tensor(distill_weight),
-                "teacher_student_cos": t_cos.detach(),
-                "teacher_pair_cos": _compute_inter_type_cos(z_teacher).detach(),
+                "teacher_student_cos": teacher_student_cos.detach(),
             }
             result.update(teacher_metrics)
 
