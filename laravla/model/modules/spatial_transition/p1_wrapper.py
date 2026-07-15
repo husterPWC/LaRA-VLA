@@ -125,37 +125,33 @@ class P1TransitionWrapper(nn.Module):
 
 class P1NoMaskWrapper(nn.Module):
     """
-    Mask-supervised, mask-free-inference P1 wrapper.
-    ================================================
-    Key differences from P1TransitionWrapper:
-      - No mask_token_encoder (current_mask is NOT an input).
-      - Adds current_mask_decoder — the model must predict current mask
-        from RGB alone, learning implicit spatial grounding.
-      - transition_module called WITHOUT mask_tokens (context = VLM only).
-      - (Step 3) DINOFutureHead: predict future DINO features as auxiliary supervision.
+    Mask-supervised, mask-free-inference P1 wrapper (v3: shared decoder).
+    ======================================================================
+    - No mask_token_encoder. Transition from VLM hidden only.
+    - SHARED mask decoder for current/future/goal — forces token differentiation.
+    - Type embedding at BOTH query input and output.
+    - Inter-type diversity loss (w=0.05) prevents cross-type collapse.
 
-    Trainable modules (all in bottleneck 512-dim):
-      - vlm_projector         2560 → 512
-      - transition_module     cross-attention (VLM only, no mask context)
-      - current_mask_decoder  predict current mask from transition tokens
-      - future_mask_decoder   predict future mask
-      - goal_mask_decoder     predict goal mask
-      - relation_head         6-class relation classifier
-      - dino_future_head      predict future DINO features [B,256,dino_dim]
+    Trainable modules:
+      - vlm_projector, transition_module, mask_decoder (shared),
+        relation_head, dino_future_head
     """
 
     def __init__(self, vla):
         super().__init__()
         self.vlm_projector = vla.vlm_projector
         self.transition_module = vla.transition_module
-        self.current_mask_decoder = vla.current_mask_decoder
-        self.future_mask_decoder = vla.future_mask_decoder
-        self.goal_mask_decoder = vla.goal_mask_decoder
+        # Shared mask decoder: current/future/goal all use the SAME decoder.
+        # If tokens collapse → same mask for all targets → loss forces differentiation.
+        self.mask_decoder = vla.current_mask_decoder  # shared!
         self.relation_head = vla.relation_head
-        self.dino_future_head = getattr(vla, 'dino_future_head', None)  # may be None
+        self.dino_future_head = getattr(vla, 'dino_future_head', None)
 
         self.loss_weights = vla.transition_loss_weights
         self.mask_res = 56
+
+        # Type embedding (same param as transition_module for output reinforcement)
+        self.type_embedding = self.transition_module.type_embedding
 
     def forward(self, vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
                 dino_future_target=None, tau_future_valid=None):
@@ -188,15 +184,22 @@ class P1NoMaskWrapper(nn.Module):
         #   [0,1] = current type  [2,3] = future type
         #   [4]   = goal type     [5]   = relation type
 
-        # ── Typed token routing: each head reads only its type ─
-        current_tokens = transition_tokens[:, 0:2, :]   # [B, 2, 512]
-        future_tokens  = transition_tokens[:, 2:4, :]   # [B, 2, 512]
-        goal_tokens    = transition_tokens[:, 4:5, :]   # [B, 1, 512]
-        relation_tokens = transition_tokens[:, 5:6, :]  # [B, 1, 512]
+        # ── Typed token routing + output type reinforcement ──
+        # Apply type embedding AGAIN at output (not just query input) so
+        # type identity survives the cross-attention / LayerNorm layers.
+        z_typed = transition_tokens + self.type_embedding  # [B, 6, 512]
 
-        current_logits = self.current_mask_decoder(current_tokens)
-        future_logits  = self.future_mask_decoder(future_tokens)
-        goal_logits    = self.goal_mask_decoder(goal_tokens)
+        current_tokens  = z_typed[:, 0:2, :]   # [B, 2, 512]
+        future_tokens   = z_typed[:, 2:4, :]   # [B, 2, 512]
+        goal_tokens     = z_typed[:, 4:5, :]   # [B, 1, 512]
+        relation_tokens = z_typed[:, 5:6, :]   # [B, 1, 512]
+
+        # Shared mask decoder: current/future/goal all use the SAME decoder.
+        # If tokens collapse → shared decoder predicts same mask for all →
+        # loss penalizes because targets differ → gradient forces tokens apart.
+        current_logits = self.mask_decoder(current_tokens)
+        future_logits  = self.mask_decoder(future_tokens)
+        goal_logits    = self.mask_decoder(goal_tokens)
         rel_logits     = self.relation_head(relation_tokens)
 
         # Resize GT masks to match decoder output resolution
@@ -241,8 +244,12 @@ class P1NoMaskWrapper(nn.Module):
         else:
             valid_ratio = torch.tensor(1.0)
 
-        # ── Token diversity loss (anti-collapse v2) ──────────
-        L_div = token_diversity_loss(transition_tokens, weight=0.01, threshold=0.5)
+        # ── Token diversity loss (anti-collapse v3) ──────────
+        # Only penalize INTER-type cosine (current vs future, current vs goal, etc.)
+        # Intra-type similarity is acceptable (e.g., two current tokens can be similar).
+        inter_type_cos = _compute_inter_type_cos(transition_tokens)  # see helper below
+        excess = F.relu(inter_type_cos - 0.5)
+        L_div = 0.05 * (excess ** 2).mean()  # stronger weight (was 0.01)
 
         total = losses["total_loss"] + L_div
         result = {
@@ -290,17 +297,10 @@ class P1NoMaskWrapper(nn.Module):
         rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else rel_logits.sum() * 0.0
 
         # ── Latent diagnostics (collapse detection) ───────────
-        # Per-token variance [T] — if →0, individual token dimensions collapse
-        latent_var = transition_tokens.var(dim=0).mean()  # mean over T tokens
-        # Pairwise cosine between tokens [T,T] — if →1, all tokens identical
-        t_norm = F.normalize(transition_tokens.float(), dim=-1)  # [B, T, D]
-        # Average over batch, then pairwise cosine of T token means
-        t_mean = t_norm.mean(dim=0)  # [T, D]
-        t_cos = t_mean @ t_mean.T  # [T, T]
-        mask = ~torch.eye(t_cos.shape[0], dtype=torch.bool, device=t_cos.device)
-        latent_pair_cos = t_cos[mask].mean()  # mean off-diagonal cosine
-        # Token norms
-        token_norms = transition_tokens.float().norm(dim=-1)  # [B, T]
+        # Inter-type vs intra-type pair cosine
+        inter_cos, intra_cos = _compute_inter_intra_cos(transition_tokens)
+        latent_var = transition_tokens.var(dim=0).mean()
+        token_norms = transition_tokens.float().norm(dim=-1)
         latent_norm_mean = token_norms.mean()
         latent_norm_std = token_norms.std()
 
@@ -311,7 +311,8 @@ class P1NoMaskWrapper(nn.Module):
             "goal_dice": goal_dice,
             "relation_acc": rel_acc,
             "latent_var": latent_var,
-            "latent_pair_cos": latent_pair_cos,
+            "latent_pair_cos": inter_cos,       # inter-type (key metric)
+            "intra_pair_cos": intra_cos,         # intra-type (acceptable if higher)
             "latent_norm_mean": latent_norm_mean,
             "latent_norm_std": latent_norm_std,
             "transition_tokens": transition_tokens,
@@ -328,3 +329,36 @@ class P1NoMaskWrapper(nn.Module):
         inter = (pred * target).sum()
         union = pred.sum() + target.sum()
         return (2.0 * inter + eps) / (union + eps)
+
+
+# ── Type-aware helpers (module-level) ──────────────────────────
+
+def _compute_inter_intra_cos(z):
+    import torch.nn.functional as F
+    z_n = F.normalize(z.float(), dim=-1)
+    z_mean = z_n.mean(dim=0)  # [6, D]
+    sim = z_mean @ z_mean.T  # [6, 6]
+    inter_vals, intra_vals = [], []
+    for i in range(6):
+        ti = _token_type(i)
+        for j in range(i + 1, 6):
+            tj = _token_type(j)
+            if ti == tj:
+                intra_vals.append(sim[i, j])
+            else:
+                inter_vals.append(sim[i, j])
+    inter_cos = torch.stack(inter_vals).mean() if inter_vals else torch.tensor(0.0)
+    intra_cos = torch.stack(intra_vals).mean() if intra_vals else torch.tensor(0.0)
+    return inter_cos, intra_cos
+
+
+def _compute_inter_type_cos(z):
+    inter_cos, _ = _compute_inter_intra_cos(z)
+    return inter_cos
+
+
+def _token_type(idx):
+    if idx < 2: return 0
+    elif idx < 4: return 1
+    elif idx < 5: return 2
+    else: return 3

@@ -31,6 +31,7 @@ Usage:
     proj   = dino_proj(tokens)      # [B, 256, 768] → [B, 256, 512]
 """
 
+import os
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
@@ -86,17 +87,31 @@ class SpatialDINOEncoder(nn.Module):
         self.model_name = model_name
         self._do_normalize = normalize
 
-        # Load from torch.hub (facebookresearch/dinov2)
+        # Load DINOv2 — use local cache when GitHub is unreachable
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=".*xFormers.*")
             if cache_dir is not None:
                 torch.hub.set_dir(cache_dir)
-            self.model = torch.hub.load(
-                "facebookresearch/dinov2",
-                model_name,
-                pretrained=False,
-                skip_validation=True,
-            )
+            try:
+                self.model = torch.hub.load(
+                    "facebookresearch/dinov2",
+                    model_name,
+                    pretrained=False,
+                    skip_validation=True,
+                )
+            except Exception:
+                # GitHub unreachable — load from local cache
+                hub_dir = torch.hub.get_dir()
+                local_repo = os.path.join(hub_dir, "facebookresearch_dinov2_main")
+                if os.path.isdir(local_repo):
+                    self.model = torch.hub.load(
+                        local_repo, model_name, source="local",
+                        pretrained=False, skip_validation=True,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Cannot load DINOv2: GitHub unreachable and no local cache at {local_repo}"
+                    )
 
         if freeze:
             for p in self.model.parameters():

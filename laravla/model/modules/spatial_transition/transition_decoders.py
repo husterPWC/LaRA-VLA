@@ -13,18 +13,23 @@ import torch.nn.functional as F
 
 
 class MaskDecoder(nn.Module):
-    """Decode bottleneck transition tokens into mask logits."""
+    """
+    Decode transition tokens into mask logits.
+    Uses mean pooling over tokens → token-count agnostic (works with 1, 2, or 6 tokens).
+    """
 
     def __init__(
         self,
         transition_dim: int = 512,
-        num_transition_tokens: int = 6,
+        num_transition_tokens: int = 6,   # kept for API compat, unused
         output_res: int = 56,
     ):
         super().__init__()
         self.output_res = output_res
+        self.transition_dim = transition_dim
+        # Mean-pool over tokens first, then decode from fixed dim
         self.pool = nn.Sequential(
-            nn.Linear(transition_dim * num_transition_tokens, 512),
+            nn.Linear(transition_dim, 512),
             nn.ReLU(inplace=True),
             nn.Linear(512, 128 * 4 * 4),
             nn.ReLU(inplace=True),
@@ -44,9 +49,17 @@ class MaskDecoder(nn.Module):
                 if m.bias is not None: nn.init.zeros_(m.bias)
 
     def forward(self, transition_tokens):
+        """
+        Args:
+            transition_tokens: [B, T, D] where T can be any number of tokens
+
+        Returns:
+            mask_logits: [B, 1, output_res, output_res]
+        """
         B = transition_tokens.shape[0]
-        flat = transition_tokens.reshape(B, -1)
-        feat = self.pool(flat).view(B, 128, 4, 4)
+        # Mean pool over tokens → [B, D]
+        x = transition_tokens.mean(dim=1)
+        feat = self.pool(x).view(B, 128, 4, 4)
         out = self.upsample(feat)
         if out.shape[-1] != self.output_res:
             diff = out.shape[-1] - self.output_res
@@ -55,37 +68,38 @@ class MaskDecoder(nn.Module):
 
 
 class RelationHead(nn.Module):
-    """Classify spatial relation from bottleneck transition tokens."""
+    """Classify spatial relation from transition tokens. Mean-pool over tokens."""
 
     def __init__(
         self,
         transition_dim: int = 512,
-        num_transition_tokens: int = 6,
+        num_transition_tokens: int = 6,   # kept for API compat, unused
         num_classes: int = 6,
     ):
         super().__init__()
         self.classifier = nn.Sequential(
-            nn.Linear(transition_dim * num_transition_tokens, 128),
+            nn.Linear(transition_dim, 128),  # mean-pool over tokens first
             nn.ReLU(inplace=True), nn.Dropout(0.1),
             nn.Linear(128, num_classes),
         )
 
     def forward(self, transition_tokens):
-        return self.classifier(transition_tokens.reshape(transition_tokens.shape[0], -1))
+        """[B, T, D] → [B, num_classes]"""
+        return self.classifier(transition_tokens.mean(dim=1))
 
 
 class TransitionToActionProjector(nn.Module):
-    """Project bottleneck transition tokens back to VLM hidden dim for action head."""
+    """Project transition tokens (mean-pooled) back to VLM hidden dim for action head."""
 
     def __init__(
         self,
         transition_dim: int = 512,
-        num_transition_tokens: int = 6,
+        num_transition_tokens: int = 6,   # kept for API compat, unused
         vlm_dim: int = 2560,
     ):
         super().__init__()
-        self.project = nn.Linear(transition_dim * num_transition_tokens, vlm_dim)
+        self.project = nn.Linear(transition_dim, vlm_dim)  # mean-pool first
 
     def forward(self, transition_tokens):
-        """[B, Kt, Dt] → [B, Dvlm]"""
-        return self.project(transition_tokens.reshape(transition_tokens.shape[0], -1))
+        """[B, Kt, Dt] → mean pool → [B, Dvlm]"""
+        return self.project(transition_tokens.mean(dim=1))

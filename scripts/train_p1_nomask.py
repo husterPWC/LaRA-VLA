@@ -237,7 +237,8 @@ def main():
             gd = out.get("goal_dice", torch.tensor(0)).item()
             ra = out.get("relation_acc", torch.tensor(0)).item()
             lv = out.get("latent_var", torch.tensor(0)).item()
-            lpc = out.get("latent_pair_cos", torch.tensor(0)).item()
+            lpc = out.get("latent_pair_cos", torch.tensor(0)).item()  # inter-type
+            ipc = out.get("intra_pair_cos", torch.tensor(0)).item()   # intra-type
             lnm = out.get("latent_norm_mean", torch.tensor(0)).item()
             lns = out.get("latent_norm_std", torch.tensor(0)).item()
             tv = out.get("tau_valid_ratio", torch.tensor(1.0)).item()
@@ -245,7 +246,7 @@ def main():
                   f"C={cm:.4f}(D{cd:.2f})  F={fm:.4f}(D{fd:.2f})  "
                   f"G={gm:.4f}(D{gd:.2f})  R={rl:.4f}(A{ra:.2f})  "
                   f"DINO={dl:.4f}(cos{dc:.2f})  τv={tv:.2f}  "
-                  f"|z|={lnm:.2f}±{lns:.2f} cos={lpc:.3f} var={lv:.4f}  "
+                  f"intER={lpc:.3f} intRA={ipc:.3f} var={lv:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
