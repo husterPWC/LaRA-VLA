@@ -109,28 +109,18 @@ def main():
     if "p1_state_dict" in p1_state:
         p1_state = p1_state["p1_state_dict"]
 
-    # Remap P1NoMaskWrapper shared mask_decoder → VLA's current_mask_decoder
-    # (P1 used shared decoder; P2 VLA has current/future/goal as separate instances)
+    # Remap P1NoMaskWrapper shared mask_decoder → all three VLA decoders
     remapped = {}
     p1_aux_keys = []
     for k, v in p1_state.items():
         if k.startswith("mask_decoder."):
-            new_k = k.replace("mask_decoder.", "current_mask_decoder.")
-            remapped[new_k] = v
+            # Map shared → current, future, goal (all three get same weights)
+            for prefix in ["current_mask_decoder.", "future_mask_decoder.", "goal_mask_decoder."]:
+                remapped[k.replace("mask_decoder.", prefix)] = v
             p1_aux_keys.append(k)
         else:
             remapped[k] = v
     missing, unexpected = vla.load_state_dict(remapped, strict=False)
-
-    # Copy trained shared decoder to future/goal decoders too
-    for k, v in remapped.items():
-        if k.startswith("current_mask_decoder."):
-            fk = k.replace("current_mask_decoder.", "future_mask_decoder.")
-            gk = k.replace("current_mask_decoder.", "goal_mask_decoder.")
-            if fk in missing:
-                vla.state_dict()[fk].copy_(v)
-            if gk in missing:
-                vla.state_dict()[gk].copy_(v)
 
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
@@ -201,13 +191,14 @@ def main():
 
     # Override model.train() to keep P1 modules in eval mode
     _orig_train = vla.train
-    def _train_with_frozen_eval(mode=True):
+    def _train_with_frozen_eval(mode: bool = True):
         _orig_train(mode)
         if mode:
             for m in p1_modules:
                 if m is not None:
                     m.eval()
-    vla.train = _train_with_frozen_eval.__get__(vla, type(vla))
+    import types
+    vla.train = types.MethodType(_train_with_frozen_eval, vla)
 
     trainable = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     if accelerator.is_main_process:
