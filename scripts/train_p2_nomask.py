@@ -189,16 +189,8 @@ def main():
     for p in vla.action_model.parameters():
         p.requires_grad_(True)
 
-    # Override model.train() to keep P1 modules in eval mode
-    _orig_train = vla.train
-    def _train_with_frozen_eval(mode: bool = True):
-        _orig_train(mode)
-        if mode:
-            for m in p1_modules:
-                if m is not None:
-                    m.eval()
-    import types
-    vla.train = types.MethodType(_train_with_frozen_eval, vla)
+    # After model.train(), force P1 frozen modules back to eval
+    # (BatchNorm in train mode changes output even with frozen weights)
 
     trainable = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     if accelerator.is_main_process:
@@ -231,6 +223,10 @@ def main():
             batch = next(data_iter)
 
         vla.train()
+        # Force frozen P1 modules to stay eval (BatchNorm train-mode breaks aux)
+        for m in p1_modules:
+            if m is not None:
+                m.eval()
         out = vla.forward(batch)
         loss = out["total_loss"]
 
