@@ -57,7 +57,7 @@ def main():
         help="Disable tau future (use original CoT future)")
     parser.add_argument("--gamma", type=float, default=2.0,
                         help="Slot identity residual gamma (try 1.0, 1.5, 2.0)")
-    parser.add_argument("--w-distill", type=float, default=0.05,
+    parser.add_argument("--w-distill", type=float, default=0.0,
                         help="Distill weight (0.0=teacher-only, 0.05=default, 0.10=strong)")
     args = parser.parse_args()
 
@@ -105,7 +105,7 @@ def main():
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
                          "current_mask": 0.05, "dino_future": 0.05,
                          "slot_residual_gamma": args.gamma,
-                         "distill_weight": args.w_distill,
+                         "distill_weight": args.w_distill,  # 0.0 = teacher auxiliary only (best)
                          "distill_warmup_steps": 100,
                          "teacher_loss_weight": 0.5},
     }
