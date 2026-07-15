@@ -98,6 +98,10 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
                 output_res=trans_cfg.get("mask_res", 56)
             )
+            self.current_mask_decoder = MaskDecoder(
+                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
+                output_res=trans_cfg.get("mask_res", 56)
+            )
             self.relation_head = RelationHead(
                 transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
                 num_classes=num_relation_labels
@@ -112,7 +116,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 vlm_dim=vlm_dim
             )
             self.transition_loss_weights = trans_cfg.get("loss_weights", {
-                "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05
+                "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
+                "current_mask": 0.05,
             })
         else:
             self.vlm_projector = None
@@ -120,6 +125,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             self.transition_module = None
             self.future_mask_decoder = None
             self.goal_mask_decoder = None
+            self.current_mask_decoder = None
             self.relation_head = None
             self.transition_to_action = None
             self.transition_action_adapter = None
@@ -130,7 +136,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
 
         # Log actual stage
         stage = self.training_stage
-        if stage in ("latent_transition", "transition_action"):
+        if stage in ("latent_transition", "transition_action",
+                     "latent_transition_nomask", "transition_action_nomask"):
             print(f"[Training Stage] {stage} — VLM frozen, Action frozen, Trainable spatial_transition only")
         elif stage == "reasoning_only":
             print(f"[Training Stage] reasoning_only mode - Freezing action_model parameters")
@@ -449,6 +456,171 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             }
             return result
 
+        elif self.training_stage == "latent_transition_nomask":
+            # Stage P1-New: RGB-only latent spatial transition pretraining.
+            # No mask_token_encoder — transition tokens learned from VLM hidden only.
+            # Supervised by: current_mask, future_mask, goal_mask, relation.
+            # Frozen: Qwen-VL + action_model. Train: transition modules only.
+            if not self.transition_enabled:
+                raise ValueError("training_stage='latent_transition_nomask' requires "
+                                 "mask_conditioned_transition.enable=true in config.")
+            from laravla.model.modules.spatial_transition import transition_total_loss
+            import torch.nn.functional as F
+
+            # Extract all masks as supervision labels (not inputs)
+            cur_masks = torch.from_numpy(
+                np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
+            ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()  # [B,1,H,W]
+
+            future_masks = torch.from_numpy(
+                np.stack([ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+
+            goal_masks = torch.from_numpy(
+                np.stack([ex.get("goal_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+
+            rel_ids = torch.tensor(
+                [ex.get("relation_label_id", -1) for ex in examples],
+                dtype=torch.long, device=self.qwen_vl_interface.model.device
+            )
+
+            # Frozen VLM forward → hidden states
+            with torch.no_grad():
+                qwen_out = self.qwen_vl_interface.encode_observation(
+                    images=batch_images, instructions=instructions,
+                    output_hidden_states=True,
+                )
+                vlm_hidden = qwen_out.hidden_states[-1].float()  # [B, L, 2560]
+
+            # Project VLM hidden to bottleneck
+            vlm_proj = self.vlm_projector(vlm_hidden)  # [B, L, transition_dim]
+
+            # Transition module: NO mask_tokens — cross-attend to VLM only
+            transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
+
+            # Decode all masks + relation
+            current_logits = self.current_mask_decoder(transition_tokens)
+            future_logits = self.future_mask_decoder(transition_tokens)
+            goal_logits = self.goal_mask_decoder(transition_tokens)
+            rel_logits = self.relation_head(transition_tokens)
+
+            # Resize GT masks to match decoder output
+            R = future_logits.shape[-1]
+            cur_gt = F.interpolate(
+                cur_masks.float(), size=(R, R), mode='nearest'
+            ).squeeze(1)
+            future_gt = F.interpolate(
+                future_masks.unsqueeze(1), size=(R, R), mode='nearest'
+            ).squeeze(1)
+            goal_gt = F.interpolate(
+                goal_masks.unsqueeze(1), size=(R, R), mode='nearest'
+            ).squeeze(1)
+
+            # Compute losses: current + future + goal + relation
+            w = self.transition_loss_weights
+            losses = transition_total_loss(
+                current_logits=current_logits, current_target=cur_gt,
+                future_logits=future_logits, future_target=future_gt,
+                goal_logits=goal_logits, goal_target=goal_gt,
+                relation_logits=rel_logits, relation_target=rel_ids,
+                w_current=w.get("current_mask", 0.05),
+                w_future=w.get("future_mask", 0.05),
+                w_goal=w.get("goal_mask", 0.10),
+                w_relation=w.get("relation", 0.05),
+            )
+
+            losses["transition_tokens"] = transition_tokens
+            return losses
+
+        elif self.training_stage == "transition_action_nomask":
+            # Stage P2-New: Transition tokens → gated adapter → action generation.
+            # No mask_token_encoder. All masks are supervision only.
+            # Frozen: Qwen-VL. Train: transition modules + adapter + action model.
+            if not self.transition_enabled:
+                raise ValueError("training_stage='transition_action_nomask' requires "
+                                 "mask_conditioned_transition.enable=true.")
+            from laravla.model.modules.spatial_transition import transition_total_loss
+            import torch.nn.functional as F
+
+            # ── Extract supervision masks ────────────────────────
+            cur_masks = torch.from_numpy(
+                np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
+            ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()
+            future_masks = torch.from_numpy(
+                np.stack([ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+            goal_masks = torch.from_numpy(
+                np.stack([ex.get("goal_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+            ).to(self.qwen_vl_interface.model.device).float()
+            rel_ids = torch.tensor(
+                [ex.get("relation_label_id", -1) for ex in examples],
+                dtype=torch.long, device=self.qwen_vl_interface.model.device)
+
+            # ── Frozen VLM encode ────────────────────────────────
+            with torch.no_grad():
+                qwen_out = self.qwen_vl_interface.encode_observation(
+                    images=batch_images, instructions=instructions,
+                    output_hidden_states=True,
+                )
+                vlm_hidden = qwen_out.hidden_states[-1].float()
+
+            # ── Transition: NO mask_tokens ───────────────────────
+            vlm_proj = self.vlm_projector(vlm_hidden)
+            transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
+
+            # ── Auxiliary spatial losses ─────────────────────────
+            current_logits = self.current_mask_decoder(transition_tokens)
+            future_logits = self.future_mask_decoder(transition_tokens)
+            goal_logits = self.goal_mask_decoder(transition_tokens)
+            rel_logits = self.relation_head(transition_tokens)
+            R = future_logits.shape[-1]
+            cur_gt = F.interpolate(cur_masks.float(), size=(R,R), mode='nearest').squeeze(1)
+            future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+            goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+            w = self.transition_loss_weights
+            trans_losses = transition_total_loss(
+                current_logits=current_logits, current_target=cur_gt,
+                future_logits=future_logits, future_target=future_gt,
+                goal_logits=goal_logits, goal_target=goal_gt,
+                relation_logits=rel_logits, relation_target=rel_ids,
+                w_current=w.get("current_mask",0.05),
+                w_future=w.get("future_mask",0.05),
+                w_goal=w.get("goal_mask",0.10),
+                w_relation=w.get("relation",0.05))
+
+            # ── Gated adapter: inject transition into action context ──
+            conditioned_vl = self.transition_action_adapter(vlm_hidden, transition_tokens)
+
+            # ── Action loss ──────────────────────────────────────
+            with torch.autocast("cuda", dtype=torch.float32):
+                actions_t = torch.tensor(np.array(actions), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
+                actions_target = actions_t[:, -(self.future_action_window_size+1):, :]
+                repeated_diffusion_steps = getattr(self.config.trainer, "repeated_diffusion_steps", 4) if self.config and hasattr(self.config, "trainer") else 4
+                actions_target_rep = actions_target.repeat(repeated_diffusion_steps, 1, 1)
+                conditioned_rep = conditioned_vl.repeat(repeated_diffusion_steps, 1, 1)
+                state_rep = None
+                if state is not None:
+                    st = torch.tensor(np.array(state), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
+                    if st.ndim == 2: st = st.unsqueeze(1)
+                    state_rep = st.repeat(repeated_diffusion_steps, 1, 1)
+                action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
+
+            result = {
+                "action_loss": action_loss,
+                "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
+                "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
+                "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),
+                "relation_loss": trans_losses.get("relation_loss", torch.tensor(0.0)),
+                "total_loss": action_loss + trans_losses["total_loss"],
+                "transition_tokens": transition_tokens,
+            }
+            return result
+
         elif self.training_stage == "action_only":
             # action_only mode: Only train action head, VLM is frozen
             with torch.autocast("cuda", dtype=torch.float32):
@@ -680,18 +852,11 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         batch_images: List[List[Image.Image]],
         instructions: List[str],
         state: Optional[np.ndarray] = None,
-        current_masks: Optional[np.ndarray] = None,
         **kwargs,
     ) -> np.ndarray:
         """
-        Inference: predict future actions via latent reasoning + diffusion sampling.
-
-        Args:
-            batch_images: List[List[PIL.Image]] per-sample image lists
-            instructions: List[str] per-sample instruction strings
-            state: Optional[np.ndarray] robot state [B, state_dim]
-            current_masks: Optional[np.ndarray] current affordance mask [B, H, W]
-                           If provided, runs through transition module → gated adapter.
+        Inference: predict future actions. RGB + instruction only (no mask).
+        P1/P2 spatial reasoning is internalized during training.
 
         Returns:
             dict with normalized_actions (np.ndarray [B, T, action_dim]).
@@ -700,47 +865,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         if train_obs_image_size:
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
 
-        # ── Transition-conditioned inference ──────────────────
-        use_transition = (
-            current_masks is not None
-            and self.transition_enabled
-            and self.transition_action_adapter is not None
-        )
-
-        if use_transition:
-            # Clean encode (no latent reasoning)
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                qwen_out = self.qwen_vl_interface.encode_observation(
-                    images=batch_images, instructions=instructions,
-                    output_hidden_states=True,
-                )
-            vlm_hidden = qwen_out.hidden_states[-1]  # [B, L, 2560]
-
-            # Current mask → mask tokens
-            cur_masks_t = torch.from_numpy(
-                np.array(current_masks)
-            ).unsqueeze(1).to(vlm_hidden.device).float()  # [B, 1, H, W]
-
-            # Bottleneck transition
-            vlm_proj = self.vlm_projector(vlm_hidden.float())
-            mask_tokens = self.mask_token_encoder(cur_masks_t)
-            transition_tokens = self.transition_module(vlm_proj, mask_tokens)
-
-            # Gated adapter
-            conditioned_vl = self.transition_action_adapter(vlm_hidden.float(), transition_tokens)
-
-            # Action prediction from conditioned hidden states
-            state_t = torch.from_numpy(np.array(state)).to(conditioned_vl.device, dtype=conditioned_vl.dtype) if state is not None else None
-            if state_t is not None and state_t.ndim == 2:
-                state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
-            with torch.autocast("cuda", dtype=torch.float32):
-                pred_actions = self.action_model.predict_action(conditioned_vl, state_t)
-
-            normalized_actions = pred_actions.detach().cpu().numpy()
-            return {"normalized_actions": normalized_actions, "thinking_gen_time": 0.0,
-                    "transition_tokens": transition_tokens}
-
-        # ── Original inference path ───────────────────────────
         use_iterative_forward = hasattr(self.qwen_vl_interface, 'forward_latent')
 
         # Step 1: QWenVL input format

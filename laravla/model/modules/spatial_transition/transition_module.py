@@ -59,10 +59,19 @@ class MaskConditionedTransitionModule(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None: nn.init.zeros_(m.bias)
 
-    def forward(self, vlm_projected, mask_tokens):
-        """[B,L,D] + [B,K,D] → [B,Kt,D]  where D=transition_dim"""
+    def forward(self, vlm_projected, mask_tokens=None):
+        """
+        [B,L,D] + optional [B,K,D] → [B,Kt,D]  where D=transition_dim.
+
+        When mask_tokens is None (no-mask mode), transition queries attend
+        to VLM projected tokens only. This is the mask-supervised but
+        mask-free-inference path.
+        """
         B = vlm_projected.shape[0]
-        context = torch.cat([vlm_projected, mask_tokens], dim=1)
+        if mask_tokens is not None:
+            context = torch.cat([vlm_projected, mask_tokens], dim=1)
+        else:
+            context = vlm_projected
         queries = self.transition_queries.expand(B, -1, -1)
 
         for layer in self.layers:

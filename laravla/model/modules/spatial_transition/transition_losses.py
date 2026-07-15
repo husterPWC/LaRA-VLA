@@ -83,9 +83,12 @@ def transition_total_loss(
     goal_target=None,
     relation_logits=None,
     relation_target=None,
+    current_logits=None,
+    current_target=None,
     w_future=0.05,
     w_goal=0.10,
     w_relation=0.05,
+    w_current=0.05,
 ):
     """
     Compute total transition loss.
@@ -97,15 +100,23 @@ def transition_total_loss(
         goal_target:      [B, H, W] float32 or None
         relation_logits:  [B, C] or None
         relation_target:  [B] LongTensor or None
-        w_future, w_goal, w_relation: loss weights
+        current_logits:   [B, 1, R, R] or None  (no-mask P1: predicted from RGB only)
+        current_target:   [B, H, W] float32 or None
+        w_future, w_goal, w_relation, w_current: loss weights
 
     Returns:
         dict with individual losses and total_loss
     """
     losses = {}
     # Start from a graph-connected zero to keep DDP happy
-    first_tensor = future_logits if future_logits is not None else (goal_logits if goal_logits is not None else relation_logits)
+    tensors = [t for t in [future_logits, goal_logits, relation_logits, current_logits] if t is not None]
+    first_tensor = tensors[0] if tensors else None
     total = first_tensor.sum() * 0.0 if first_tensor is not None else torch.tensor(0.0)
+
+    if current_logits is not None and current_target is not None:
+        L_current = mask_loss(current_logits, current_target)
+        losses["current_mask_loss"] = L_current
+        total = total + w_current * L_current
 
     if future_logits is not None and future_target is not None:
         L_future = mask_loss(future_logits, future_target)
