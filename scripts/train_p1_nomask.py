@@ -508,10 +508,10 @@ def _verify_dino_roundtrip(output_dir, vla, loader, use_tau_future, device):
     ri = torch.tensor([s["relation_label_id"] for s in batch], dtype=torch.long, device=device)
     orig_out = p1_reload(vh, cm, fm, gm, ri, dino_future_target=dino_target)
 
-    # Manual DINO cosine
+    # Manual DINO cosine (dino_future_head is inside backbone)
     with torch.no_grad():
         future_tokens = orig_out["transition_tokens"][:, 2:4, :]
-        pred = p1_reload.dino_future_head(future_tokens)
+        pred = backbone_reload.dino_future_head(future_tokens)
         manual_cos = (F.normalize(pred.float(), dim=-1) * F.normalize(dino_target.float(), dim=-1)).sum(dim=-1).mean().item()
         manual_loss = 1.0 - manual_cos
 
