@@ -269,9 +269,17 @@ def main():
             tR = out.get("teacher_RelAcc", torch.tensor(0)).item()
             tDC = out.get("teacher_dino_cos", torch.tensor(0)).item()
             dw = out.get("distill_weight", torch.tensor(0)).item()
+            # dino_future_head grad norm
+            dino_grad_norm = 0.0
+            if hasattr(p1_model, 'module'):
+                dh = getattr(p1_model.module, 'dino_future_head', None)
+            else:
+                dh = getattr(p1_model, 'dino_future_head', None)
+            if dh is not None:
+                dino_grad_norm = sum(p.grad.norm().item() for p in dh.parameters() if p.grad is not None)
             print(f"  Step {step:5d}: total={loss.item():.4f} (S) "
                   f"C={cm:.4f}(D{cd:.2f}) F={fm:.4f}(D{fd:.2f}) G={gm:.4f}(D{gd:.2f}) "
-                  f"R={rl:.4f}(A{ra:.2f}) DINO={dl:.4f}(cos{dc:.2f})  τv={tv:.2f}  "
+                  f"R={rl:.4f}(A{ra:.2f}) DINO={dl:.4f}(cos{dc:.2f}) Dgrad={dino_grad_norm:.2e}  τv={tv:.2f}  "
                   f"inter={lpc:.3f}  |  (T) C={tC:.2f} F={tF:.2f} G={tG:.2f} R={tR:.2f} Dc={tDC:.2f}  "
                   f"distill={tdl:.4f}(cos{tcos:.3f} dw{dw:.3f})  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}")
@@ -425,6 +433,104 @@ def main():
         torch.save({"p1_state_dict": unwrapped.state_dict()}, str(output_dir / "final_model.pt"))
         print(f"\n{'='*60}\nP1-New Complete\n  Best val: {best_eval:.4f}\n"
               f"  Time: {(time.time()-t0)/60:.0f}min\n{'='*60}")
+
+        # ── Post-training DINO verification ────────────────────
+        print(f"\n{'='*60}")
+        print("Post-training DINO round-trip verification")
+        print(f"{'='*60}")
+        _verify_dino_roundtrip(output_dir, vla, loader, args.use_tau_future, accelerator.device)
+
+
+def _verify_dino_roundtrip(output_dir, vla, loader, use_tau_future, device):
+    """Reload best_student.pt and verify DINO cos on fixed eval batches."""
+    import torch.nn.functional as F
+    ckpt_path = output_dir / "best_student.pt"
+    if not ckpt_path.exists():
+        print("  No best_student.pt found, skipping")
+        return
+
+    # Reload in eval mode
+    state = torch.load(str(ckpt_path), map_location="cpu")
+    if "p1_state_dict" not in state:
+        print("  No p1_state_dict in checkpoint")
+        return
+
+    from laravla.model.modules.spatial_transition import P1NoMaskWrapper
+    p1_reload = P1NoMaskWrapper(vla).to(device)
+    p1_reload.load_state_dict(state["p1_state_dict"], strict=False)
+    p1_reload.eval()
+    for p in p1_reload.parameters():
+        p.requires_grad_(False)
+
+    # Save-load round-trip: compare original vs reloaded pred on one batch
+    eval_iter = iter(loader)
+    batch = next(eval_iter)
+    images = [s["image"] for s in batch]
+    instructions = [s["lang"] for s in batch]
+    dino_key = "image_tau_future" if use_tau_future else "image_next"
+    with torch.no_grad():
+        qo = vla.qwen_vl_interface.encode_observation(images=images, instructions=instructions, output_hidden_states=True)
+        vh = qo.hidden_states[-1]
+        # DINO target
+        fimgs = [s.get(dino_key, s.get("image_next", None)) for s in batch]
+        ftensors = []
+        for i, fi in enumerate(fimgs):
+            if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
+            if fi is not None: ftensors.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
+            else: ftensors.append(torch.from_numpy(np.array(images[i][0], dtype=np.uint8)).permute(2,0,1))
+        fut_rgb = torch.stack(ftensors).to(device)
+        dino_target = vla.dino_encoder(fut_rgb)
+
+    # Original pred (from training wrapper)
+    from laravla.model.modules.spatial_transition import P1NoMaskWrapper as P1W
+    cm = torch.from_numpy(np.stack([s["current_affordance_mask_agentview"] for s in batch])).unsqueeze(1).to(device).float()
+    fm = torch.from_numpy(np.stack([s.get("future_tau_mask_agentview", s.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32))) for s in batch])).to(device).float()
+    gm = torch.from_numpy(np.stack([s["goal_affordance_mask_agentview"] for s in batch])).to(device).float()
+    ri = torch.tensor([s["relation_label_id"] for s in batch], dtype=torch.long, device=device)
+    orig_out = p1_reload(vh, cm, fm, gm, ri, dino_future_target=dino_target)
+
+    # Manual DINO cosine
+    with torch.no_grad():
+        future_tokens = orig_out["transition_tokens"][:, 2:4, :]
+        pred = p1_reload.dino_future_head(future_tokens)
+        manual_cos = (F.normalize(pred.float(), dim=-1) * F.normalize(dino_target.float(), dim=-1)).sum(dim=-1).mean().item()
+        manual_loss = 1.0 - manual_cos
+
+    print(f"  Round-trip batch: DINO cos(reported)={orig_out.get('dino_future_cos', torch.tensor(0)).item():.4f}")
+    print(f"  Manual DINO cos={manual_cos:.4f}  loss={manual_loss:.4f}")
+    print(f"  target_norm={dino_target.float().norm(dim=-1).mean():.1f}  pred_norm={pred.float().norm(dim=-1).mean():.1f}")
+    print(f"  target_finite={torch.isfinite(dino_target).all().item()}  pred_finite={torch.isfinite(pred).all().item()}")
+
+    # Multi-batch eval
+    dino_cos_vals = []
+    for bi, eb in enumerate(loader):
+        if bi >= 20: break
+        eimages = [s["image"] for s in eb]
+        einst = [s["lang"] for s in eb]
+        ecm = torch.from_numpy(np.stack([s["current_affordance_mask_agentview"] for s in eb])).unsqueeze(1).to(device).float()
+        efm = torch.from_numpy(np.stack([s.get("future_tau_mask_agentview", s.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32))) for s in eb])).to(device).float()
+        egm = torch.from_numpy(np.stack([s["goal_affordance_mask_agentview"] for s in eb])).to(device).float()
+        eri = torch.tensor([s["relation_label_id"] for s in eb], dtype=torch.long, device=device)
+        with torch.no_grad():
+            eqo = vla.qwen_vl_interface.encode_observation(images=eimages, instructions=einst, output_hidden_states=True)
+            evh = eqo.hidden_states[-1]
+        efimgs = [s.get(dino_key, s.get("image_next", None)) for s in eb]
+        eft = []
+        for i, fi in enumerate(efimgs):
+            if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
+            if fi is not None: eft.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
+            else: eft.append(torch.from_numpy(np.array(eimages[i][0], dtype=np.uint8)).permute(2,0,1))
+        with torch.no_grad():
+            edt = vla.dino_encoder(torch.stack(eft).to(device))
+            eeo = p1_reload(evh, ecm, efm, egm, eri, dino_future_target=edt)
+            dino_cos_vals.append(eeo.get("dino_future_cos", torch.tensor(0)).item())
+
+    avg_cos = np.mean(dino_cos_vals) if dino_cos_vals else 0
+    print(f"  Fresh reload DINO cos over 20 batches: {avg_cos:.4f}")
+    if avg_cos >= 0.70:
+        print(f"  ✅ DINO verification PASSED")
+    else:
+        print(f"  ❌ DINO cos {avg_cos:.4f} < 0.70 — checkpoint may be invalid")
 
 
 if __name__ == "__main__":
