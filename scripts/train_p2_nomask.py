@@ -253,14 +253,14 @@ def main():
             rl = out.get("relation_loss", torch.tensor(0)).item()
             vla_unwrapped = accelerator.unwrap_model(vla)
             vla_unwrapped = accelerator.unwrap_model(vla)
-            gate_raw = vla_unwrapped.transition_action_adapter.gate.item()
-            gate_act = torch.tanh(vla_unwrapped.transition_action_adapter.gate).item()
+            gate_logit = vla_unwrapped.transition_action_adapter.gate_logit.item()
+            gate_act = torch.sigmoid(vla_unwrapped.transition_action_adapter.gate_logit).item()
             dl = out.get("dino_future_loss", torch.tensor(0)).item()
             ts = out.get("transition_tokens", None)
             z_norm = ts.float().norm(dim=-1).mean().item() if ts is not None else 0
             print(f"  Step {step:5d}: total={loss.item():.4f} action={al:.4f} "
                   f"C={cm:.4f} F={fm:.4f} G={gm:.4f} R={rl:.4f} "
-                  f"DINO={dl:.4f} gate_raw={gate_raw:.4f} gate_act={gate_act:.4f} "
+                  f"DINO={dl:.4f} gate_logit={gate_logit:.3f} gate_sig={gate_act:.3f} "
                   f"|z|={z_norm:.1f} lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
@@ -290,16 +290,16 @@ def main():
                 avg_tot = np.mean(eval_tot) if eval_tot else float("nan")
                 avg_al = np.mean(eval_al) if eval_al else float("nan")
                 unwrapped = accelerator.unwrap_model(vla)
-                gate_val = torch.tanh(unwrapped.transition_action_adapter.gate).item()
-                print(f"  📊 Eval {step+1}: total={avg_tot:.4f} action={avg_al:.4f} gate={gate_val:.4f}")
+                gate_val = torch.sigmoid(unwrapped.transition_action_adapter.gate_logit).item()
+                print(f"  📊 Eval {step+1}: total={avg_tot:.4f} action={avg_al:.4f} gate_sig={gate_val:.4f}")
                 with open(output_dir / "metrics.jsonl", "a") as f:
                     f.write(json.dumps({"step": step + 1, "val_total": float(avg_tot),
-                                        "val_action": float(avg_al), "gate": float(gate_val)}) + "\n")
-                if avg_tot < best_eval:
-                    best_eval = avg_tot
+                                        "val_action": float(avg_al), "gate_sig": float(gate_val)}) + "\n")
+                if avg_al < best_eval:
+                    best_eval = avg_al
                     torch.save({"model_state_dict": unwrapped.state_dict()},
                                str(output_dir / "best_model.pt"))
-                    print(f"  🏆 Best saved (val={best_eval:.4f})")
+                    print(f"  🏆 Best action (eval_action={best_eval:.4f})")
 
     # ── Final ───────────────────────────────────────────────
     accelerator.wait_for_everyone()

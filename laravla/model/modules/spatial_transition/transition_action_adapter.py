@@ -85,13 +85,14 @@ class GatedTransitionActionAdapter(nn.Module):
             vlm_dim, num_heads, dropout=dropout, batch_first=True
         )
         self.attn_norm = nn.LayerNorm(vlm_dim)
-        self.gate = nn.Parameter(torch.zeros(1))
+        # Sigmoid gate: logit=-2.2 → sigmoid≈0.1 initially (spatial active but weak)
+        self.gate_logit = nn.Parameter(torch.tensor(-2.2))
 
     def forward(self, vl_embs, transition_tokens):
         """
         Args:
             vl_embs:           [B, L, 2560]
-            transition_tokens: [B, Kt, 512]  (6 typed + optionally 2 spatial)
+            transition_tokens: [B, Kt, 512]  (6 typed + 2 spatial)
 
         Returns:
             conditioned_vl_embs: [B, L, 2560]
@@ -99,5 +100,5 @@ class GatedTransitionActionAdapter(nn.Module):
         proj = self.projector(transition_tokens)  # [B, Kt, 2560]
         attn_out, _ = self.cross_attn(query=vl_embs, key=proj, value=proj)
         attn_out = self.attn_norm(attn_out)
-        gate_val = torch.tanh(self.gate)
+        gate_val = torch.sigmoid(self.gate_logit)  # ∈(0,1), init≈0.1
         return vl_embs + gate_val * attn_out
