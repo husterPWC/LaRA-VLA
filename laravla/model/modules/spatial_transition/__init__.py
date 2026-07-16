@@ -1,12 +1,7 @@
 """
 Spatial Transition Module — Mask-Supervised Latent Spatial Transition Reasoning.
 ================================================================================
-Bottleneck architecture (default 512-dim):
-  RGB → VLM hidden (2560) → VLMProjector → (512)
-  RGB → frozen DINO → dense spatial features (384/768)
-  VLM_proj → TransitionModule → [B,Kt,512]
-  transition_tokens → MaskDecoders (current/future/goal), RelationHead
-  transition_tokens → DINO future predictor (auxiliary)
+Formal unified architecture. P1 and P2 share a single SpatialTransitionBackbone.
 """
 
 from laravla.model.modules.spatial_transition.mask_token_encoder import (
@@ -36,4 +31,11 @@ from laravla.model.modules.spatial_transition.dino_future_head import (
 )
 from laravla.model.modules.spatial_transition.posterior_encoder import (
     PosteriorTransitionEncoder
+)
+# ── Formal unified architecture ────────────────────────────
+from laravla.model.modules.spatial_transition.spatial_backbone import (
+    SpatialTransitionBackbone, SpatialTransitionOutput, build_spatial_backbone
+)
+from laravla.model.modules.spatial_transition.dino_metric import (
+    dino_future_cosine
 )

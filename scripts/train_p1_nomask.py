@@ -116,21 +116,29 @@ def main():
     vla = vla.to(accelerator.device)
     vla.eval()
 
-    # ── Freeze all → unfreeze only P1 in wrapper ─────────────
-    for p in vla.parameters():
-        p.requires_grad_(False)
+    # ── Build formal SpatialTransitionBackbone ──────────────
+    from laravla.model.modules.spatial_transition import (
+        SpatialTransitionBackbone, P1NoMaskWrapper
+    )
+    backbone = SpatialTransitionBackbone(
+        vlm_dim=vla.qwen_vl_interface.model.config.hidden_size,
+        hidden_dim=512, num_slots=6, gamma=args.gamma,
+    )
+    posterior = vla.posterior_encoder  # may be None
 
-    from laravla.model.modules.spatial_transition import P1NoMaskWrapper
-    p1_model = P1NoMaskWrapper(vla).to(accelerator.device)
+    p1_model = P1NoMaskWrapper(
+        backbone=backbone,
+        posterior_encoder=posterior,
+        loss_weights=vla.transition_loss_weights,
+    ).to(accelerator.device)
     for p in p1_model.parameters():
         p.requires_grad_(True)
 
     if accelerator.is_main_process:
         n = sum(p.numel() for p in p1_model.parameters())
-        print(f"  P1NoMaskWrapper trainable: {n/1e6:.1f}M")
-        print(f"  Modules: vlm_projector, transition_module, "
-              f"current/future/goal_mask_decoder, relation_head, dino_future_head")
-        print(f"  VLM: frozen (no_grad encode), DINO: frozen, mask_token_encoder: NOT USED")
+        print(f"  P1 Backbone trainable: {n/1e6:.1f}M")
+        print(f"  gamma={args.gamma}  w_distill={args.w_distill}")
+        print(f"  VLM: frozen (no_grad encode), DINO: frozen")
         print(f"  DDP wraps: P1NoMaskWrapper only")
 
     # ── Optimizer ───────────────────────────────────────────
@@ -455,9 +463,20 @@ def _verify_dino_roundtrip(output_dir, vla, loader, use_tau_future, device):
         print("  No p1_state_dict in checkpoint")
         return
 
-    from laravla.model.modules.spatial_transition import P1NoMaskWrapper
-    p1_reload = P1NoMaskWrapper(vla).to(device)
-    p1_reload.load_state_dict(state["p1_state_dict"], strict=False)
+    from laravla.model.modules.spatial_transition import (
+        SpatialTransitionBackbone, P1NoMaskWrapper
+    )
+    backbone_reload = SpatialTransitionBackbone(
+        vlm_dim=vla.qwen_vl_interface.model.config.hidden_size,
+        hidden_dim=512, num_slots=6, gamma=1.5,
+    ).to(device)
+    backbone_reload.eval()
+    # Load backbone params from checkpoint
+    backbone_state = {k.replace("backbone.", ""): v for k, v in state["p1_state_dict"].items() if k.startswith("backbone.")}
+    backbone_reload.load_state_dict(backbone_state, strict=False)
+    for p in backbone_reload.parameters():
+        p.requires_grad_(False)
+    p1_reload = P1NoMaskWrapper(backbone=backbone_reload, loss_weights=vla.transition_loss_weights).to(device)
     p1_reload.eval()
     for p in p1_reload.parameters():
         p.requires_grad_(False)

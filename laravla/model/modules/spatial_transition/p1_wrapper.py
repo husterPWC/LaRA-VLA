@@ -1,25 +1,8 @@
 """
-P1TransitionWrapper: lightweight wrapper for DDP-safe P1 training.
-===================================================================
-Only wraps the 6 P1 trainable modules (~26.5M). Qwen-VL and Action
-model stay outside DDP — each rank loads its own frozen copy locally.
-
-P1NoMaskWrapper: mask-supervised but mask-free-inference variant.
-===================================================================
-No mask_token_encoder — transition tokens are learned from VLM hidden
-only. Adds current_mask_decoder so the model learns to ground current
-objects from RGB alone. current/future/goal masks are supervision only.
-
-Usage in training script:
-    vla = build_framework(cfg)
-    vla.load_state_dict(...)
-    # Freeze VLA
-    for p in vla.parameters(): p.requires_grad_(False)
-    # Build P1 wrapper (trainable)
-    p1_model = P1TransitionWrapper(vla).to(device)       # old: mask-conditioned
-    p1_model = P1NoMaskWrapper(vla).to(device)           # new: RGB-only
-    # DDP only wraps p1_model
-    p1_model, optimizer, loader = accelerator.prepare(p1_model, optimizer, loader)
+P1TransitionWrapper + P1NoMaskWrapper — DDP-safe P1 training.
+===============================================================
+P1TransitionWrapper: legacy mask-conditioned (kept for ablation).
+P1NoMaskWrapper:    formal unified — uses SpatialTransitionBackbone.
 """
 
 import torch
@@ -28,96 +11,56 @@ import torch.nn.functional as F
 
 
 class P1TransitionWrapper(nn.Module):
-    """Wraps P1 trainable modules only. Qwen-VL stays outside for no_grad encode."""
+    """Legacy mask-conditioned P1 wrapper (kept for ablation only)."""
 
     def __init__(self, vla):
         super().__init__()
-        # Copy references to P1 trainable sub-modules
         self.vlm_projector = vla.vlm_projector
         self.mask_token_encoder = vla.mask_token_encoder
         self.transition_module = vla.transition_module
         self.future_mask_decoder = vla.future_mask_decoder
         self.goal_mask_decoder = vla.goal_mask_decoder
         self.relation_head = vla.relation_head
-
-        # Cache loss weights and config
         self.loss_weights = vla.transition_loss_weights
         self.mask_res = 56
 
     def forward(self, vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids):
-        """
-        Args:
-            vlm_hidden:    [B, L, 2560] frozen Qwen-VL hidden states
-            cur_masks:     [B, 1, H, W] current affordance mask
-            future_masks:  [B, H, W]    future mask GT
-            goal_masks:    [B, H, W]    goal mask GT
-            rel_ids:       [B] LongTensor relation label ids
-
-        Returns:
-            dict with total_loss, future_mask_loss, goal_mask_loss, relation_loss,
-                 future_dice, goal_dice, relation_acc, transition_tokens
-        """
         from laravla.model.modules.spatial_transition import transition_total_loss
-
-        # Bottleneck projection
         vlm_proj = self.vlm_projector(vlm_hidden.float())
-
-        # Mask tokens
         mask_tokens = self.mask_token_encoder(cur_masks)
-
-        # Transition
         transition_tokens = self.transition_module(vlm_proj, mask_tokens)
-
-        # Decode
         future_logits = self.future_mask_decoder(transition_tokens)
         goal_logits = self.goal_mask_decoder(transition_tokens)
         rel_logits = self.relation_head(transition_tokens)
-
-        # Resize GT masks
         R = future_logits.shape[-1]
-        future_gt = F.interpolate(
-            future_masks.unsqueeze(1), size=(R, R), mode='nearest'
-        ).squeeze(1)
-        goal_gt = F.interpolate(
-            goal_masks.unsqueeze(1), size=(R, R), mode='nearest'
-        ).squeeze(1)
-
-        # Losses
+        future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+        goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
         w = self.loss_weights
         losses = transition_total_loss(
             future_logits=future_logits, future_target=future_gt,
             goal_logits=goal_logits, goal_target=goal_gt,
             relation_logits=rel_logits, relation_target=rel_ids,
-            w_future=w.get("future_mask", 0.05),
-            w_goal=w.get("goal_mask", 0.10),
-            w_relation=w.get("relation", 0.05),
-        )
-
-        # Metrics
+            w_future=w.get("future_mask",0.05), w_goal=w.get("goal_mask",0.10),
+            w_relation=w.get("relation",0.05))
         future_dice = self._dice(future_logits, future_gt)
         goal_dice = self._dice(goal_logits, goal_gt)
         rel_pred = rel_logits.argmax(dim=1)
         valid = (rel_ids >= 0) & (rel_ids < rel_logits.shape[1])
         rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else rel_logits.sum() * 0.0
-
         return {
             "total_loss": losses["total_loss"],
             "future_mask_loss": losses.get("future_mask_loss", torch.tensor(0.0)),
             "goal_mask_loss": losses.get("goal_mask_loss", torch.tensor(0.0)),
             "relation_loss": losses.get("relation_loss", torch.tensor(0.0)),
-            "future_dice": future_dice,
-            "goal_dice": goal_dice,
-            "relation_acc": rel_acc,
-            "transition_tokens": transition_tokens,
+            "future_dice": future_dice, "goal_dice": goal_dice,
+            "relation_acc": rel_acc, "transition_tokens": transition_tokens,
         }
 
     @staticmethod
     def _dice(logits, target, eps=1e-6):
         pred = (torch.sigmoid(logits) > 0.5).float()
-        if target.dim() == 2:
-            target = target.unsqueeze(1)
-        elif target.dim() == 3:
-            target = target.unsqueeze(1)
+        if target.dim() == 2: target = target.unsqueeze(1)
+        elif target.dim() == 3: target = target.unsqueeze(1)
         inter = (pred * target).sum()
         union = pred.sum() + target.sum()
         return (2.0 * inter + eps) / (union + eps)
@@ -125,340 +68,178 @@ class P1TransitionWrapper(nn.Module):
 
 class P1NoMaskWrapper(nn.Module):
     """
-    Mask-supervised, mask-free-inference P1 wrapper (v3: shared decoder).
-    ======================================================================
-    - No mask_token_encoder. Transition from VLM hidden only.
-    - SHARED mask decoder for current/future/goal — forces token differentiation.
-    - Type embedding at BOTH query input and output.
-    - Inter-type diversity loss (w=0.05) prevents cross-type collapse.
+    Formal unified P1 wrapper using SpatialTransitionBackbone.
+    ===========================================================
+    Student: backbone(vlm_hidden) → masks, relation, DINO prediction.
+    Teacher: posterior_encoder (optional, training-only).
 
-    Trainable modules:
-      - vlm_projector, transition_module, mask_decoder (shared),
-        relation_head, dino_future_head
+    Checkpoint format:
+        {"p1_state_dict": wrapper.state_dict()}
+        → backbone params stored as "backbone.*" keys.
     """
 
-    def __init__(self, vla):
+    def __init__(self, backbone, posterior_encoder=None,
+                 loss_weights=None, mask_res=56):
         super().__init__()
-        self.vlm_projector = vla.vlm_projector
-        self.transition_module = vla.transition_module
-        self.mask_decoder = vla.current_mask_decoder  # shared!
-        self.relation_head = vla.relation_head
-        self.dino_future_head = getattr(vla, 'dino_future_head', None)
-        self.posterior_encoder = getattr(vla, 'posterior_encoder', None)  # Step 5
-
-        self.loss_weights = vla.transition_loss_weights
-        self.mask_res = 56
-        self.type_embedding = self.transition_module.type_embedding
-
-        # Distill warmup tracking
+        self.backbone = backbone
+        self.posterior_encoder = posterior_encoder
+        self.loss_weights = loss_weights or {}
+        self.mask_res = mask_res
         self.register_buffer('_distill_step', torch.tensor(0, dtype=torch.long))
 
     def forward(self, vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
-                dino_future_target=None, tau_future_valid=None,
-                dino_cur=None):
+                dino_future_target=None, tau_future_valid=None, dino_cur=None):
         """
-        Args:
-            vlm_hidden:         [B, L, 2560] frozen Qwen-VL hidden states
-            cur_masks:          [B, 1, H, W] current mask SUPERVISION
-            future_masks:       [B, H, W]    tau future mask GT
-            goal_masks:         [B, H, W]    goal mask GT
-            rel_ids:            [B] LongTensor relation label ids
-            dino_future_target: [B, 256, dino_dim] or None
-            tau_future_valid:   [B] bool tensor or None
-            dino_cur:           [B, 256, dino_dim] or None — current DINO for teacher
-
-        Returns:
-            dict with total_loss, individual losses, metrics, transition_tokens
+        Returns dict with total_loss, individual losses, metrics, transition_tokens.
         """
         from laravla.model.modules.spatial_transition import (
-            transition_total_loss, dino_cosine_loss, dino_cosine_similarity,
-            token_diversity_loss
+            transition_total_loss, token_diversity_loss, dino_future_cosine
         )
-
-        # Bottleneck projection: VLM hidden → 512-dim
-        vlm_proj = self.vlm_projector(vlm_hidden.float())
-
-        # Transition: NO mask tokens — cross-attend to VLM only
-        # Slot identity residual (v4): the transition module's self-attention
-        # homogenizes token queries (q_init inter=0.001 → z_raw inter=0.88).
-        # We add the ORIGINAL diverse queries as a strong residual so token
-        # identity survives through the module.
-        B = vlm_proj.shape[0]
-        q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
-                  + self.transition_module.type_embedding.expand(B, -1, -1))
-        transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
-
-        # Strong residual: LayerNorm'd original diverse queries survive.
-        # LN(q_init) normalizes each query to ~unit norm so the residual
-        # contribution is scale-invariant regardless of absolute norm.
-        GAMMA = self.loss_weights.get("slot_residual_gamma", 2.0)
-        q_init_ln = F.layer_norm(q_init.float(), [q_init.shape[-1]])
-        z_typed = transition_tokens + GAMMA * q_init_ln
-        z_typed = F.layer_norm(z_typed.float(), [z_typed.shape[-1]])
-        # transition_tokens: [B, 6, 512]
-        #   [0,1] = current type  [2,3] = future type
-        #   [4]   = goal type     [5]   = relation type
-
-        current_tokens  = z_typed[:, 0:2, :]   # [B, 2, 512]
-        future_tokens   = z_typed[:, 2:4, :]   # [B, 2, 512]
-        goal_tokens     = z_typed[:, 4:5, :]   # [B, 1, 512]
-        relation_tokens = z_typed[:, 5:6, :]   # [B, 1, 512]
-
-        # Shared mask decoder: current/future/goal all use the SAME decoder.
-        # If tokens collapse → shared decoder predicts same mask for all →
-        # loss penalizes because targets differ → gradient forces tokens apart.
-        current_logits = self.mask_decoder(current_tokens)
-        future_logits  = self.mask_decoder(future_tokens)
-        goal_logits    = self.mask_decoder(goal_tokens)
-        rel_logits     = self.relation_head(relation_tokens)
-
-        # Resize GT masks to match decoder output resolution
-        R = future_logits.shape[-1]
-        cur_gt = F.interpolate(
-            cur_masks.float(), size=(R, R), mode='nearest'
-        ).squeeze(1)
-        future_gt = F.interpolate(
-            future_masks.unsqueeze(1), size=(R, R), mode='nearest'
-        ).squeeze(1)
-        goal_gt = F.interpolate(
-            goal_masks.unsqueeze(1), size=(R, R), mode='nearest'
-        ).squeeze(1)
-
-        # ── Spatial losses: current + future + goal + relation ──
         w = self.loss_weights
+
+        # ── Student forward ──────────────────────────────────
+        out = self.backbone(vlm_hidden)
+
+        # Resize GT masks
+        R = out.future_mask_logits.shape[-1]
+        cur_gt = F.interpolate(cur_masks.float(), size=(R,R), mode='nearest').squeeze(1)
+        future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+        goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
+
+        # Spatial losses
         losses = transition_total_loss(
-            current_logits=current_logits, current_target=cur_gt,
-            future_logits=future_logits, future_target=future_gt,
-            goal_logits=goal_logits, goal_target=goal_gt,
-            relation_logits=rel_logits, relation_target=rel_ids,
-            w_current=w.get("current_mask", 0.05),
-            w_future=w.get("future_mask", 0.05),
-            w_goal=w.get("goal_mask", 0.10),
-            w_relation=w.get("relation", 0.05),
+            current_logits=out.current_mask_logits, current_target=cur_gt,
+            future_logits=out.future_mask_logits, future_target=future_gt,
+            goal_logits=out.goal_mask_logits, goal_target=goal_gt,
+            relation_logits=out.relation_logits, relation_target=rel_ids,
+            w_current=w.get("current_mask",0.05), w_future=w.get("future_mask",0.05),
+            w_goal=w.get("goal_mask",0.10), w_relation=w.get("relation",0.05),
         )
 
-        # ── Loss masking for tau_future_valid (Step 4) ────────────
-        # When tau_future_valid=False, future gap is too small — mask future
-        # and DINO losses (but keep current/goal/relation intact).
-        if tau_future_valid is not None:
-            valid_mask = tau_future_valid.float().to(losses["total_loss"].device)
-            valid_ratio = valid_mask.mean()
-            if valid_ratio < 1.0 and valid_ratio > 0:
-                # Scale future mask loss by valid ratio
-                if "future_mask_loss" in losses:
-                    losses["future_mask_loss"] = losses["future_mask_loss"] * valid_ratio
-                losses["total_loss"] = losses["total_loss"] - (
-                    w.get("future_mask", 0.05) *
-                    losses.get("future_mask_loss", torch.tensor(0.0)) / max(valid_ratio, 0.01) * (1 - valid_ratio)
-                )
-        else:
-            valid_ratio = torch.tensor(1.0)
-
-        # ── Token diversity loss (anti-collapse v3) ──────────
-        # Only penalize INTER-type cosine (current vs future, current vs goal, etc.)
-        # Intra-type similarity is acceptable (e.g., two current tokens can be similar).
-        inter_type_cos = _compute_inter_type_cos(transition_tokens)  # see helper below
-        excess = F.relu(inter_type_cos - 0.5)
-        L_div = 0.05 * (excess ** 2).mean()  # stronger weight (was 0.01)
-
+        # Token diversity
+        L_div = token_diversity_loss(out.z_student, weight=0.01, threshold=0.5)
         total = losses["total_loss"] + L_div
+
         result = {
-            "token_diversity_loss": L_div,
             "current_mask_loss": losses.get("current_mask_loss", torch.tensor(0.0)),
             "future_mask_loss": losses.get("future_mask_loss", torch.tensor(0.0)),
             "goal_mask_loss": losses.get("goal_mask_loss", torch.tensor(0.0)),
             "relation_loss": losses.get("relation_loss", torch.tensor(0.0)),
-            "tau_valid_ratio": valid_ratio.detach() if isinstance(valid_ratio, torch.Tensor) else torch.tensor(valid_ratio),
         }
 
-        # ── DINO future loss (Step 3) ────────────────────────────
-        if self.dino_future_head is not None and dino_future_target is not None:
-            pred_dino = self.dino_future_head(future_tokens)              # [B, 256, dino_dim] (reads future type)
-            L_dino = dino_cosine_loss(pred_dino, dino_future_target)      # scalar (averaged over batch)
-            cos_dino = dino_cosine_similarity(pred_dino, dino_future_target)
+        # Tau valid masking for future mask loss
+        if tau_future_valid is not None:
+            valid_mask = tau_future_valid.float().to(total.device)
+            result["tau_valid_ratio"] = valid_mask.mean().detach()
 
-            # Mask DINO loss for invalid tau samples
-            if tau_future_valid is not None:
-                dino_valid_mask = tau_future_valid.float().to(L_dino.device)
-                dino_valid_ratio = dino_valid_mask.mean()
-                if dino_valid_ratio < 1.0 and dino_valid_ratio > 0:
-                    # Recompute per-sample DINO loss with masking
-                    pred_n = torch.nn.functional.normalize(pred_dino.float(), dim=-1)
-                    target_n = torch.nn.functional.normalize(dino_future_target.float(), dim=-1)
-                    per_sample_loss = 1.0 - (pred_n * target_n).sum(dim=-1).mean(dim=-1)  # [B]
-                    L_dino_masked = (per_sample_loss * dino_valid_mask).sum() / max(dino_valid_mask.sum(), 1)
-                    L_dino = L_dino_masked
-                    result["tau_valid_ratio"] = dino_valid_ratio.detach()
+        # ── DINO future loss ─────────────────────────────────
+        if out.pred_future_dino is not None and dino_future_target is not None:
+            dino_result = dino_future_cosine(
+                out.pred_future_dino, dino_future_target, valid=tau_future_valid)
+            L_dino = dino_result["loss"]
+            if L_dino is not None:
+                total = total + w.get("dino_future", 0.05) * L_dino
+                result["dino_future_loss"] = L_dino
+                result["dino_future_cos"] = dino_result.get("cosine",
+                    torch.tensor(0.0) if dino_result["cosine"] is None else dino_result["cosine"])
 
-            w_dino = w.get("dino_future", 0.05)
-            total = total + w_dino * L_dino
-
-            result["dino_future_loss"] = L_dino
-            result["dino_future_cos"] = cos_dino
-        else:
-            L_dino = None
-
-        # ── Teacher branch (Step 5) ──────────────────────────────
-        # Teacher sees privileged info (DINO, masks, relation) and
-        # produces z_teacher. Student mimics it via distill loss.
-        L_teacher = torch.tensor(0.0, device=total.device)
-        L_distill = torch.tensor(0.0, device=total.device)
-        teacher_cos = torch.tensor(0.0, device=total.device)
-        teacher_metrics = {}
-
+        # ── Teacher branch (Step 5, training-only) ───────────
         if self.posterior_encoder is not None and dino_future_target is not None and dino_cur is not None:
-            # --- Teacher forward ---
             z_teacher = self.posterior_encoder(
-                dino_cur=dino_cur,
-                dino_fut=dino_future_target,
+                dino_cur=dino_cur, dino_fut=dino_future_target,
                 cur_mask=cur_masks,
-                fut_mask=future_masks.unsqueeze(1) if future_masks.dim() == 3 else future_masks,
-                goal_mask=goal_masks.unsqueeze(1) if goal_masks.dim() == 3 else goal_masks,
-                rel_id=rel_ids,
-            )  # [B, 6, D]
-
-            # Teacher decoding with SHARED heads
-            teacher_current_tokens  = z_teacher[:, 0:2, :]
-            teacher_future_tokens   = z_teacher[:, 2:4, :]
-            teacher_goal_tokens     = z_teacher[:, 4:5, :]
-            teacher_relation_tokens = z_teacher[:, 5:6, :]
-
-            t_cur_logits = self.mask_decoder(teacher_current_tokens)
-            t_fut_logits = self.mask_decoder(teacher_future_tokens)
-            t_goal_logits = self.mask_decoder(teacher_goal_tokens)
-            t_rel_logits = self.relation_head(teacher_relation_tokens)
-
-            teacher_losses = transition_total_loss(
-                current_logits=t_cur_logits, current_target=cur_gt,
-                future_logits=t_fut_logits, future_target=future_gt,
-                goal_logits=t_goal_logits, goal_target=goal_gt,
-                relation_logits=t_rel_logits, relation_target=rel_ids,
-                w_current=w.get("current_mask", 0.05),
-                w_future=w.get("future_mask", 0.05),
-                w_goal=w.get("goal_mask", 0.10),
-                w_relation=w.get("relation", 0.05),
-            )
-
-            t_dino_pred = self.dino_future_head(teacher_future_tokens)
-            t_dino_loss_val = dino_cosine_loss(t_dino_pred, dino_future_target)
-            teacher_losses["dino_future_loss"] = t_dino_loss_val
-            teacher_losses["dino_future_cos"] = dino_cosine_similarity(t_dino_pred, dino_future_target)
-            teacher_losses["total_loss"] = teacher_losses["total_loss"] + w.get("dino_future", 0.05) * t_dino_loss_val
-
-            w_teacher = w.get("teacher_loss_weight", 0.5)
-            L_teacher = w_teacher * teacher_losses["total_loss"]
-
-            # --- Distill loss ---
-            # Use L2-normalize (not LayerNorm) so cosine is bounded [-1,1]
-            z_student_n = F.normalize(transition_tokens.float(), dim=-1)
-            z_teacher_n = F.normalize(z_teacher.float(), dim=-1)
-            L_distill_raw = F.mse_loss(z_student_n, z_teacher_n.detach())
-
-            # Warmup schedule
+                fut_mask=future_masks.unsqueeze(1) if future_masks.dim()==3 else future_masks,
+                goal_mask=goal_masks.unsqueeze(1) if goal_masks.dim()==3 else goal_masks,
+                rel_id=rel_ids)
+            t_out = self.backbone.decode_student(z_teacher)
+            t_losses = transition_total_loss(
+                current_logits=t_out.current_mask_logits, current_target=cur_gt,
+                future_logits=t_out.future_mask_logits, future_target=future_gt,
+                goal_logits=t_out.goal_mask_logits, goal_target=goal_gt,
+                relation_logits=t_out.relation_logits, relation_target=rel_ids,
+                w_current=w.get("current_mask",0.05), w_future=w.get("future_mask",0.05),
+                w_goal=w.get("goal_mask",0.10), w_relation=w.get("relation",0.05))
+            if t_out.pred_future_dino is not None:
+                t_dino = dino_future_cosine(t_out.pred_future_dino, dino_future_target)
+                if t_dino["loss"] is not None:
+                    t_losses["dino_future_loss"] = t_dino["loss"]
+                    t_losses["total_loss"] = t_losses["total_loss"] + w.get("dino_future",0.05)*t_dino["loss"]
+            L_teacher = w.get("teacher_loss_weight", 0.5) * t_losses["total_loss"]
+            total = total + L_teacher
+            # Distill (warmup)
+            zs_n = F.normalize(out.z_student.float(), dim=-1)
+            zt_n = F.normalize(z_teacher.float(), dim=-1)
+            distill_raw = F.mse_loss(zs_n, zt_n.detach())
             warmup_steps = int(w.get("distill_warmup_steps", 100))
-            distill_weight = w.get("distill_weight", 0.05)
+            distill_w = w.get("distill_weight", 0.05)
             self._distill_step += 1
             if self._distill_step.item() < warmup_steps:
-                ratio = self._distill_step.item() / max(warmup_steps, 1)
-                distill_weight = distill_weight * ratio
-            L_distill = distill_weight * L_distill_raw
+                distill_w = distill_w * self._distill_step.item() / max(warmup_steps, 1)
+            total = total + distill_w * distill_raw
+            result.update({
+                "teacher_C_dice": self._dice(t_out.current_mask_logits, cur_gt).detach(),
+                "teacher_F_dice": self._dice(t_out.future_mask_logits, future_gt).detach(),
+                "teacher_G_dice": self._dice(t_out.goal_mask_logits, goal_gt).detach(),
+                "teacher_total_loss": t_losses["total_loss"].detach(),
+                "teacher_dino_cos": t_dino.get("cosine", torch.tensor(0.0)).detach() if t_dino["cosine"] is not None else torch.tensor(0.0),
+                "teacher_pair_cos": torch.tensor(0.0),
+                "distill_loss": (distill_w * distill_raw).detach(),
+                "teacher_student_cos": (zs_n * zt_n.detach()).sum(dim=-1).mean().detach(),
+            })
 
-            # Cosine between student and teacher (range [-1,1], higher = better)
-            teacher_student_cos = (z_student_n * z_teacher_n.detach()).sum(dim=-1).mean()
-
-            total = total + L_teacher + L_distill
-
-            # Teacher metrics
-            teacher_C = self._dice(t_cur_logits, cur_gt).detach()
-            teacher_F = self._dice(t_fut_logits, future_gt).detach()
-            teacher_G = self._dice(t_goal_logits, goal_gt).detach()
-            t_rel_pred = t_rel_logits.argmax(dim=1)
-            t_valid = (rel_ids >= 0) & (rel_ids < t_rel_logits.shape[1])
-            teacher_Rel = (t_rel_pred[t_valid] == rel_ids[t_valid]).float().mean() if t_valid.any() else torch.tensor(0.0)
-
-            teacher_metrics = {
-                "teacher_C_dice": teacher_C,
-                "teacher_F_dice": teacher_F,
-                "teacher_G_dice": teacher_G,
-                "teacher_RelAcc": teacher_Rel.detach() if isinstance(teacher_Rel, torch.Tensor) else teacher_Rel,
-                "teacher_total_loss": teacher_losses["total_loss"].detach(),
-                "teacher_dino_cos": teacher_losses.get("dino_future_cos", torch.tensor(0.0)).detach(),
-                "teacher_pair_cos": _compute_inter_type_cos(z_teacher).detach(),
-                "distill_loss_raw": L_distill_raw.detach(),
-                "distill_loss": L_distill.detach(),
-                "distill_weight": torch.tensor(distill_weight),
-                "teacher_student_cos": teacher_student_cos.detach(),
-            }
-            result.update(teacher_metrics)
-
-        # ── Metrics ──────────────────────────────────────────────
-        cur_dice = self._dice(current_logits, cur_gt)
-        future_dice = self._dice(future_logits, future_gt)
-        goal_dice = self._dice(goal_logits, goal_gt)
-        rel_pred = rel_logits.argmax(dim=1)
-        valid = (rel_ids >= 0) & (rel_ids < rel_logits.shape[1])
-        rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else rel_logits.sum() * 0.0
-
-        # ── Latent diagnostics (collapse detection) ───────────
-        # Inter-type vs intra-type pair cosine
-        inter_cos, intra_cos = _compute_inter_intra_cos(transition_tokens)
-        latent_var = transition_tokens.var(dim=0).mean()
-        token_norms = transition_tokens.float().norm(dim=-1)
-        latent_norm_mean = token_norms.mean()
-        latent_norm_std = token_norms.std()
+        # ── Metrics ──────────────────────────────────────────
+        cur_dice = self._dice(out.current_mask_logits, cur_gt)
+        future_dice = self._dice(out.future_mask_logits, future_gt)
+        goal_dice = self._dice(out.goal_mask_logits, goal_gt)
+        rel_pred = out.relation_logits.argmax(dim=1)
+        valid = (rel_ids >= 0) & (rel_ids < out.relation_logits.shape[1])
+        rel_acc = (rel_pred[valid] == rel_ids[valid]).float().mean() if valid.any() else out.relation_logits.sum()*0.0
+        z_n = F.normalize(out.z_student.float(), dim=-1).mean(dim=0)
+        sim = z_n @ z_n.T
+        mask = ~torch.eye(6, dtype=torch.bool, device=sim.device)
+        latent_pair_cos = sim[mask].mean()
 
         result.update({
             "total_loss": total,
-            "current_dice": cur_dice,
-            "future_dice": future_dice,
-            "goal_dice": goal_dice,
-            "relation_acc": rel_acc,
-            "latent_var": latent_var,
-            "latent_pair_cos": inter_cos,       # inter-type (key metric)
-            "intra_pair_cos": intra_cos,         # intra-type (acceptable if higher)
-            "latent_norm_mean": latent_norm_mean,
-            "latent_norm_std": latent_norm_std,
-            "transition_tokens": transition_tokens,
+            "current_dice": cur_dice, "future_dice": future_dice,
+            "goal_dice": goal_dice, "relation_acc": rel_acc,
+            "latent_var": out.z_student.var(dim=0).mean(),
+            "latent_pair_cos": latent_pair_cos,
+            "latent_norm_mean": out.z_student.float().norm(dim=-1).mean(),
+            "latent_norm_std": out.z_student.float().norm(dim=-1).std(),
+            "transition_tokens": out.z_student,
         })
         return result
 
     @staticmethod
     def _dice(logits, target, eps=1e-6):
         pred = (torch.sigmoid(logits) > 0.5).float()
-        if target.dim() == 2:
-            target = target.unsqueeze(1)
-        elif target.dim() == 3:
-            target = target.unsqueeze(1)
+        if target.dim() == 2: target = target.unsqueeze(1)
+        elif target.dim() == 3: target = target.unsqueeze(1)
         inter = (pred * target).sum()
         union = pred.sum() + target.sum()
         return (2.0 * inter + eps) / (union + eps)
 
 
-# ── Type-aware helpers (module-level) ──────────────────────────
+# ── Type-aware helpers ──────────────────────────────────────
 
 def _compute_inter_intra_cos(z):
     import torch.nn.functional as F
-    z_n = F.normalize(z.float(), dim=-1)
-    z_mean = z_n.mean(dim=0)  # [6, D]
-    sim = z_mean @ z_mean.T  # [6, 6]
-    inter_vals, intra_vals = [], []
+    z_n = F.normalize(z.float(), dim=-1).mean(dim=0); s = z_n @ z_n.T
+    inter, intra = [], []
     for i in range(6):
-        ti = _token_type(i)
-        for j in range(i + 1, 6):
-            tj = _token_type(j)
-            if ti == tj:
-                intra_vals.append(sim[i, j])
-            else:
-                inter_vals.append(sim[i, j])
-    inter_cos = torch.stack(inter_vals).mean() if inter_vals else torch.tensor(0.0)
-    intra_cos = torch.stack(intra_vals).mean() if intra_vals else torch.tensor(0.0)
-    return inter_cos, intra_cos
-
+        ti = 0 if i<2 else (1 if i<4 else (2 if i<5 else 3))
+        for j in range(i+1,6):
+            tj = 0 if j<2 else (1 if j<4 else (2 if j<5 else 3))
+            if ti==tj: intra.append(s[i,j])
+            else: inter.append(s[i,j])
+    ic = torch.stack(inter).mean() if inter else torch.tensor(0.0)
+    ia = torch.stack(intra).mean() if intra else torch.tensor(0.0)
+    return ic, ia
 
 def _compute_inter_type_cos(z):
-    inter_cos, _ = _compute_inter_intra_cos(z)
-    return inter_cos
-
+    ic, _ = _compute_inter_intra_cos(z)
+    return ic
 
 def _token_type(idx):
     if idx < 2: return 0
