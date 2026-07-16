@@ -713,6 +713,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                     dino_target = self.dino_encoder(future_rgb)
                 from laravla.model.modules.spatial_transition import dino_cosine_loss, dino_cosine_similarity
                 dino_future_loss = dino_cosine_loss(pred_dino, dino_target)
+                dino_future_cos_p2 = dino_cosine_similarity(pred_dino, dino_target)
+            else:
+                dino_future_cos_p2 = torch.tensor(0.0)
 
             # ── Gated adapter with spatial stream ─────────────────
             # Build extended tokens: 6 typed + dino_subgoal + proprio
@@ -747,6 +750,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             result = {
                 "action_loss": action_loss,
                 "dino_future_loss": dino_future_loss.detach(),
+                "dino_future_cos": dino_future_cos_p2.detach(),
                 "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
                 "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
                 "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),
