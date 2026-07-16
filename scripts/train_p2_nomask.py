@@ -205,6 +205,13 @@ def main():
         print(f"  P1 modules: {'frozen' if args.freeze_transition else 'trainable'}")
         print(f"  Adapter: trainable | Action: trainable")
 
+    # ── P2-side DINO parity check ────────────────────────────
+    if accelerator.is_main_process:
+        print(f"\n{'='*60}")
+        print("P2 DINO Parity Check (after P1 load, before training)")
+        print(f"{'='*60}")
+        _p2_dino_parity(vla, loader, accelerator.device)
+
     # ── Optimizer ───────────────────────────────────────────
     optimizer = torch.optim.AdamW(
         [p for p in vla.parameters() if p.requires_grad],
@@ -318,6 +325,66 @@ def main():
                    str(output_dir / "final_model.pt"))
         print(f"\n{'='*60}\nP2-New Complete\n  Best val: {best_eval:.4f}\n"
               f"  Time: {(time.time()-t0)/60:.0f}min\n{'='*60}")
+
+
+def _p2_dino_parity(vla, loader, device):
+    """Verify P2's frozen dino_future_head matches P1 fresh-reload performance."""
+    import torch.nn.functional as F
+    from laravla.model.modules.spatial_transition import P1NoMaskWrapper
+
+    vla.eval()
+    # P1NoMaskWrapper shares VLA's already-loaded params (no disk reload needed)
+    p1_ref = P1NoMaskWrapper(vla).to(device)
+    p1_ref.eval()
+    for p in p1_ref.parameters():
+        p.requires_grad_(False)
+
+    dino_key = 'image_tau_future'
+    dino_cos_p1, dino_cos_p2 = [], []
+    for bi, batch in enumerate(loader):
+        if bi >= 10: break
+        images = [s['image'] for s in batch]
+        instructions = [s['lang'] for s in batch]
+        cm = torch.from_numpy(np.stack([s['current_affordance_mask_agentview'] for s in batch])).unsqueeze(1).to(device).float()
+        fm = torch.from_numpy(np.stack([s.get('future_tau_mask_agentview', s.get('future_affordance_mask_agentview', np.zeros((224,224),dtype=np.float32))) for s in batch])).to(device).float()
+        gm = torch.from_numpy(np.stack([s['goal_affordance_mask_agentview'] for s in batch])).to(device).float()
+        ri = torch.tensor([s['relation_label_id'] for s in batch], dtype=torch.long, device=device)
+        with torch.no_grad():
+            qo = vla.qwen_vl_interface.encode_observation(images=images, instructions=instructions, output_hidden_states=True)
+            vh = qo.hidden_states[-1]
+        # Tau future DINO target
+        fimgs = [s.get(dino_key, s.get('image_next', None)) for s in batch]
+        ft = []
+        for i, fi in enumerate(fimgs):
+            if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
+            if fi is not None: ft.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
+            else: ft.append(torch.from_numpy(np.array(images[i][0], dtype=np.uint8)).permute(2,0,1))
+        with torch.no_grad():
+            dt = vla.dino_encoder(torch.stack(ft).to(device))
+        # P1 reference
+        p1_out = p1_ref(vh, cm, fm, gm, ri, dino_future_target=dt)
+        dino_cos_p1.append(p1_out.get('dino_future_cos', torch.tensor(0)).item())
+        # P2 internal
+        p2_out = vla.forward(batch)
+        # Compute P2 DINO cos manually
+        ts = p2_out.get('transition_tokens')
+        if ts is not None:
+            ftok = ts[:, 2:4, :]
+            pred = vla.dino_future_head(ftok)
+            cos = (F.normalize(pred.float(), dim=-1) * F.normalize(dt.float(), dim=-1)).sum(dim=-1).mean().item()
+            dino_cos_p2.append(cos)
+        if bi == 0:
+            z_diff = (p1_out['transition_tokens'] - ts).abs().max().item() if ts is not None else -1
+            print(f"  Batch 0: P1 DINO cos={dino_cos_p1[-1]:.4f}  P2 DINO cos={dino_cos_p2[-1]:.4f}  z_diff={z_diff:.2e}")
+
+    avg_p1 = np.mean(dino_cos_p1) if dino_cos_p1 else 0
+    avg_p2 = np.mean(dino_cos_p2) if dino_cos_p2 else 0
+    print(f"  P1 ref DINO cos={avg_p1:.4f}  P2 internal DINO cos={avg_p2:.4f}")
+    if avg_p2 >= 0.70:
+        print(f"  ✅ P2 DINO parity PASSED")
+    else:
+        print(f"  ❌ P2 DINO cos={avg_p2:.4f} < 0.70 — check P1→P2 interface")
+    vla.train()
 
 
 if __name__ == "__main__":

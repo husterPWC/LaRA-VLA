@@ -360,8 +360,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()  # [B,1,H,W]
 
             future_masks = torch.from_numpy(
-                np.stack([ex.get("future_affordance_mask_agentview",
-                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+                np.stack([ex.get("future_tau_mask_agentview",
+                                 ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32))) for ex in examples])
             ).to(self.qwen_vl_interface.model.device).float()
 
             goal_masks = torch.from_numpy(
@@ -433,8 +434,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
             ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()
             future_masks = torch.from_numpy(
-                np.stack([ex.get("future_affordance_mask_agentview",
-                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+                np.stack([ex.get("future_tau_mask_agentview",
+                                 ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32))) for ex in examples])
             ).to(self.qwen_vl_interface.model.device).float()
             goal_masks = torch.from_numpy(
                 np.stack([ex.get("goal_affordance_mask_agentview",
@@ -514,8 +516,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()  # [B,1,H,W]
 
             future_masks = torch.from_numpy(
-                np.stack([ex.get("future_affordance_mask_agentview",
-                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+                np.stack([ex.get("future_tau_mask_agentview",
+                                 ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32))) for ex in examples])
             ).to(self.qwen_vl_interface.model.device).float()
 
             goal_masks = torch.from_numpy(
@@ -632,8 +635,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 np.stack([ex["current_affordance_mask_agentview"] for ex in examples])
             ).unsqueeze(1).to(self.qwen_vl_interface.model.device).float()
             future_masks = torch.from_numpy(
-                np.stack([ex.get("future_affordance_mask_agentview",
-                                 np.zeros((224,224), dtype=np.float32)) for ex in examples])
+                np.stack([ex.get("future_tau_mask_agentview",
+                                 ex.get("future_affordance_mask_agentview",
+                                 np.zeros((224,224), dtype=np.float32))) for ex in examples])
             ).to(self.qwen_vl_interface.model.device).float()
             goal_masks = torch.from_numpy(
                 np.stack([ex.get("goal_affordance_mask_agentview",
@@ -687,12 +691,9 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_goal=w.get("goal_mask",0.10),
                 w_relation=w.get("relation",0.05))
 
-            # ── DINO future prediction ─
-            # NOTE: P1 best was trained with CoT future (image_next) due to an
-            # adapter bug where hdf5_tau_future_idx was not passed through.
-            # Use image_next here to match P1 training data distribution.
-            # After P1 is retrained with tau future, switch to image_tau_future.
-            future_images_list = [ex.get("image_next", None) for ex in examples]
+            # ── DINO future prediction (tau future, matches P1 training) ─
+            future_images_list = [ex.get("image_tau_future",
+                                         ex.get("image_next", None)) for ex in examples]
             dino_future_loss = torch.tensor(0.0, device=vlm_hidden.device)
             pred_dino = None
             if self.dino_encoder is not None and self.dino_future_head is not None:
