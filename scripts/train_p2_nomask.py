@@ -55,6 +55,8 @@ def main():
                         help="Disable freeze (Stage 6B fine-tuning)")
     parser.add_argument("--aux-weight", type=float, default=0.05,
                         help="Weight for auxiliary spatial losses in P2 (default 0.05)")
+    parser.add_argument("--gate-init", type=float, default=-2.2,
+                        help="Gate logit init: -2.2→sig≈0.1, -10→sig≈0 (ablation)")
     args = parser.parse_args()
     if args.no_freeze_transition:
         args.freeze_transition = False
@@ -125,6 +127,10 @@ def main():
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
 
+    # Apply gate initialization (supports ablation: -2.2≈0.1, -10≈0)
+    if hasattr(vla.transition_action_adapter, 'gate_logit'):
+        vla.transition_action_adapter.gate_logit.data.fill_(args.gate_init)
+
     if accelerator.is_main_process:
         print(f"  P1-New weights loaded (remapped {len(p1_aux_keys)} shared decoder keys).")
         p1_relevant_missing = [k for k in missing if not k.startswith("action_model.")
@@ -135,7 +141,7 @@ def main():
             for k in sorted(p1_relevant_missing)[:10]:
                 print(f"      - {k}")
         gamma = vla.transition_loss_weights.get("slot_residual_gamma", "N/A")
-        print(f"  gamma={gamma}")
+        print(f"  gamma={gamma}  gate_init={args.gate_init}  sigmoid(gate_init)={torch.sigmoid(torch.tensor(args.gate_init)).item():.4f}")
 
     # ── P1 parity check: run one batch and print aux metrics ──
     if accelerator.is_main_process:
