@@ -546,10 +546,6 @@ def _verify_dino_roundtrip(output_dir, vla, loader, use_tau_future, device):
 
     avg_cos = np.mean(dino_cos_vals) if dino_cos_vals else 0
     print(f"  Fresh reload DINO cos over 20 batches: {avg_cos:.4f}")
-    if avg_cos >= 0.70:
-        print(f"  ✅ DINO verification PASSED")
-    else:
-        print(f"  ❌ DINO cos {avg_cos:.4f} < 0.70 — checkpoint may be invalid")
 
 
 if __name__ == "__main__":

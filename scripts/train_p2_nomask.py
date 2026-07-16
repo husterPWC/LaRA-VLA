@@ -356,7 +356,7 @@ def _p2_dino_parity(vla, loader, device):
         ts = p2_out.get('transition_tokens')
         if ts is not None:
             ftok = ts[:, 2:4, :]
-            pred = vla.dino_future_head(ftok)
+            pred = vla.spatial_backbone.dino_future_head(ftok)
             cos = (F.normalize(pred.float(), dim=-1) * F.normalize(dt.float(), dim=-1)).sum(dim=-1).mean().item()
             dino_cos_p2.append(cos)
         if bi == 0:
