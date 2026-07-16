@@ -258,9 +258,12 @@ def main():
             dl = out.get("dino_future_loss", torch.tensor(0)).item()
             ts = out.get("transition_tokens", None)
             z_norm = ts.float().norm(dim=-1).mean().item() if ts is not None else 0
+            spat_grad = 0.0
+            if vla_unwrapped.transition_action_adapter.gate_logit.grad is not None:
+                spat_grad = vla_unwrapped.transition_action_adapter.gate_logit.grad.item()
             print(f"  Step {step:5d}: total={loss.item():.4f} action={al:.4f} "
                   f"C={cm:.4f} F={fm:.4f} G={gm:.4f} R={rl:.4f} "
-                  f"DINO={dl:.4f} gate_logit={gate_logit:.3f} gate_sig={gate_act:.3f} "
+                  f"DINO={dl:.4f} gate_logit={gate_logit:.3f} gate_sig={gate_act:.3f} g_grad={spat_grad:.2e} "
                   f"|z|={z_norm:.1f} lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
