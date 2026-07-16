@@ -45,18 +45,47 @@ class ProprioEncoder(nn.Module):
 
 
 class DINOSpatialProjector(nn.Module):
-    """Project predicted future DINO features → [B, 1, transition_dim]."""
+    """
+    Project predicted future DINO features → [B, num_queries, transition_dim].
+    Upgraded from mean-pool [B,1,512] to spatial resampler that preserves
+    spatial structure via per-patch projection + 2D position embedding.
+    """
 
-    def __init__(self, dino_dim: int = 768, transition_dim: int = 512):
+    def __init__(self, dino_dim: int = 768, transition_dim: int = 512,
+                 num_queries: int = 16, num_patches: int = 256,
+                 num_heads: int = 8):
         super().__init__()
-        self.project = nn.Sequential(
+        self.num_queries = num_queries
+
+        # Per-patch projection: 768 → 512
+        self.patch_proj = nn.Sequential(
             nn.Linear(dino_dim, transition_dim),
             nn.LayerNorm(transition_dim),
         )
+        # 2D position embedding for 16×16 patches
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches, transition_dim) * 0.02)
+
+        # Cross-attention resampler: 16 queries attend to 256 patches
+        self.queries = nn.Parameter(torch.randn(1, num_queries, transition_dim) * 0.02)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=transition_dim, num_heads=num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(transition_dim)
 
     def forward(self, pred_future_dino):
-        """[B, K, dino_dim] → mean pool → [B, 1, transition_dim]"""
-        return self.project(pred_future_dino.mean(dim=1)).unsqueeze(1)
+        """
+        Args:
+            pred_future_dino: [B, 256, 768] predicted DINO patch features
+
+        Returns:
+            [B, num_queries, transition_dim] spatial tokens
+        """
+        B = pred_future_dino.shape[0]
+        # Project patches + add position embedding
+        x = self.patch_proj(pred_future_dino) + self.pos_embed[:, :x.shape[1] if hasattr(self, '_cached') else 256, :]
+        # Resample: 16 queries cross-attend to 256 patches
+        q = self.queries.expand(B, -1, -1)
+        out, _ = self.cross_attn(query=q, key=x, value=x)
+        return self.norm(out)
 
 
 class GatedTransitionActionAdapter(nn.Module):

@@ -126,7 +126,8 @@ def main():
         vla.transition_action_adapter.gate_logit.data.fill_(args.gate_init)
 
     if accelerator.is_main_process:
-        print(f"  P1 backbone loaded: {p1_loaded} keys, missing={len(missing)}, unexpected={len(unexpected)}")
+        print(f"  P1 backbone loaded: {p1_loaded} keys, missing={len(missing)}, unexpected={len(unexpected)} (strict)")
+        print(f"  P2 formal: L_total = L_action (aux metrics are monitoring only)")
         if missing:
             print(f"    ❌ MISSING: {len(missing)} keys")
             for k in sorted(missing)[:10]:

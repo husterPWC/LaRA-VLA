@@ -101,7 +101,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 state_dim=7, transition_dim=self.transition_dim)
             self.dino_spatial_projector = DINOSpatialProjector(
                 dino_dim=dino_dim, transition_dim=self.transition_dim)
-            adapter_num_tokens = trans_cfg.get("num_transition_tokens", 6) + 2
+            dino_queries = 16  # 16 spatial queries from DINO projector
+            adapter_num_tokens = trans_cfg.get("num_transition_tokens", 6) + dino_queries + 1
             self.transition_action_adapter = GatedTransitionActionAdapter(
                 transition_dim=self.transition_dim,
                 num_transition_tokens=adapter_num_tokens, vlm_dim=vlm_dim)
@@ -682,7 +683,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                     state_rep = st2.repeat(rds, 1, 1)
                 action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
 
-            total = action_loss + trans_losses["total_loss"] + w.get("dino_future", 0.05) * dino_loss_val
+            # P2 formal: aux losses are monitoring only, not in optimization target
+            total = action_loss
             result = {
                 "action_loss": action_loss,
                 "dino_future_loss": dino_loss_val.detach(),
