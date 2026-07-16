@@ -313,7 +313,9 @@ def main():
                                         "val_action": float(avg_al), "gate_sig": float(gate_val)}) + "\n")
                 if avg_al < best_eval:
                     best_eval = avg_al
-                    torch.save({"model_state_dict": unwrapped.state_dict()},
+                    trainable_state = {k: v for k, v in unwrapped.state_dict().items()
+                                       if any(p in k for p in ['transition_action_adapter', 'proprio_encoder', 'dino_spatial_projector', 'action_model'])}
+                    torch.save({"model_state_dict": trainable_state},
                                str(output_dir / "best_model.pt"))
                     print(f"  🏆 Best action (eval_action={best_eval:.4f})")
 
@@ -321,7 +323,9 @@ def main():
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unwrapped = accelerator.unwrap_model(vla)
-        torch.save({"model_state_dict": unwrapped.state_dict()},
+        trainable_state = {k: v for k, v in unwrapped.state_dict().items()
+                           if any(p in k for p in ['transition_action_adapter', 'proprio_encoder', 'dino_spatial_projector', 'action_model'])}
+        torch.save({"model_state_dict": trainable_state},
                    str(output_dir / "final_model.pt"))
         print(f"\n{'='*60}\nP2-New Complete\n  Best val: {best_eval:.4f}\n"
               f"  Time: {(time.time()-t0)/60:.0f}min\n{'='*60}")
