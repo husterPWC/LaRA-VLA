@@ -106,23 +106,17 @@ def main():
     vla = build_framework(OmegaConf.create(model_cfg))
     vla.load_state_dict(torch.load(CKPT, map_location="cpu"), strict=False)
 
-    # Inject P1-New trained weights
+    # Inject P1 backbone (strict, unified format)
     p1_state = torch.load(args.p1_ckpt, map_location="cpu")
     if "p1_state_dict" in p1_state:
         p1_state = p1_state["p1_state_dict"]
 
-    # Remap P1NoMaskWrapper shared mask_decoder → all three VLA decoders
-    remapped = {}
-    p1_aux_keys = []
-    for k, v in p1_state.items():
-        if k.startswith("mask_decoder."):
-            # Map shared → current, future, goal (all three get same weights)
-            for prefix in ["current_mask_decoder.", "future_mask_decoder.", "goal_mask_decoder."]:
-                remapped[k.replace("mask_decoder.", prefix)] = v
-            p1_aux_keys.append(k)
-        else:
-            remapped[k] = v
-    missing, unexpected = vla.load_state_dict(remapped, strict=False)
+    # Backbone keys in P1 checkpoint are "backbone.*" — load directly
+    backbone_state = {k.replace("backbone.", ""): v
+                      for k, v in p1_state.items() if k.startswith("backbone.")}
+    missing, unexpected = vla.spatial_backbone.load_state_dict(
+        backbone_state, strict=True)
+    p1_loaded = len(backbone_state)
 
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
@@ -132,14 +126,17 @@ def main():
         vla.transition_action_adapter.gate_logit.data.fill_(args.gate_init)
 
     if accelerator.is_main_process:
-        print(f"  P1-New weights loaded (remapped {len(p1_aux_keys)} shared decoder keys).")
-        p1_relevant_missing = [k for k in missing if not k.startswith("action_model.")
-                               and "dino_encoder" not in k and "_distill" not in k
-                               and "posterior_encoder" not in k]
-        if p1_relevant_missing:
-            print(f"    ⚠️  P1-relevant missing: {len(p1_relevant_missing)}")
-            for k in sorted(p1_relevant_missing)[:10]:
+        print(f"  P1 backbone loaded: {p1_loaded} keys, missing={len(missing)}, unexpected={len(unexpected)}")
+        if missing:
+            print(f"    ❌ MISSING: {len(missing)} keys")
+            for k in sorted(missing)[:10]:
                 print(f"      - {k}")
+        if unexpected:
+            print(f"    ❌ UNEXPECTED: {len(unexpected)} keys")
+            for k in sorted(unexpected)[:10]:
+                print(f"      + {k}")
+        if not missing and not unexpected:
+            print(f"    ✅ Strict load passed")
         gamma = vla.transition_loss_weights.get("slot_residual_gamma", "N/A")
         print(f"  gamma={gamma}  gate_init={args.gate_init}  sigmoid(gate_init)={torch.sigmoid(torch.tensor(args.gate_init)).item():.4f}")
 
@@ -161,42 +158,27 @@ def main():
     for p in vla.qwen_vl_interface.parameters():
         p.requires_grad_(False)
 
-    # Step 6A: freeze P1 modules + force eval mode (BatchNorm stays in eval)
-    p1_modules = [vla.vlm_projector, vla.transition_module,
-                   vla.current_mask_decoder, vla.relation_head,
-                   vla.dino_future_head, vla.dino_encoder]
+    # Step 6A: freeze P1 backbone + DINO, train action components
+    p1_modules = [vla.spatial_backbone, vla.dino_encoder]
     if vla.posterior_encoder is not None:
         p1_modules.append(vla.posterior_encoder)
     for m in p1_modules:
         if m is not None:
             for p in m.parameters():
                 p.requires_grad_(False)
-            m.eval()  # critical: prevent BatchNorm train-mode drift
+            m.eval()
 
-    # Freeze unused modules
-    if vla.mask_token_encoder is not None:
-        for p in vla.mask_token_encoder.parameters():
-            p.requires_grad_(False)
-        vla.mask_token_encoder.eval()
-    if vla.transition_to_action is not None:
-        for p in vla.transition_to_action.parameters():
-            p.requires_grad_(False)
-        vla.transition_to_action.eval()
-
-    # Step 6A trainable: adapter + spatial projectors + action model
+    # Trainable: adapter + spatial projectors + action model
     for p in vla.transition_action_adapter.parameters():
         p.requires_grad_(True)
     if vla.proprio_encoder is not None:
-        for p in vla.proprio_encoder.parameters():
-            p.requires_grad_(True)
+        for p in vla.proprio_encoder.parameters(): p.requires_grad_(True)
     if vla.dino_spatial_projector is not None:
-        for p in vla.dino_spatial_projector.parameters():
-            p.requires_grad_(True)
+        for p in vla.dino_spatial_projector.parameters(): p.requires_grad_(True)
     for p in vla.action_model.parameters():
         p.requires_grad_(True)
 
-    # After model.train(), force P1 frozen modules back to eval
-    # (BatchNorm in train mode changes output even with frozen weights)
+    # After model.train(), force frozen modules back to eval
 
     trainable = sum(p.numel() for p in vla.parameters() if p.requires_grad)
     if accelerator.is_main_process:
@@ -328,13 +310,16 @@ def main():
 
 
 def _p2_dino_parity(vla, loader, device):
-    """Verify P2's frozen dino_future_head matches P1 fresh-reload performance."""
+    """Verify P2's frozen backbone matches P1 fresh-reload performance."""
     import torch.nn.functional as F
     from laravla.model.modules.spatial_transition import P1NoMaskWrapper
 
     vla.eval()
-    # P1NoMaskWrapper shares VLA's already-loaded params (no disk reload needed)
-    p1_ref = P1NoMaskWrapper(vla).to(device)
+    # P1NoMaskWrapper with same backbone (shares params)
+    p1_ref = P1NoMaskWrapper(
+        backbone=vla.spatial_backbone,
+        loss_weights=vla.transition_loss_weights,
+    ).to(device)
     p1_ref.eval()
     for p in p1_ref.parameters():
         p.requires_grad_(False)

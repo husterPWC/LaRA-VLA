@@ -73,100 +73,63 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         trans_cfg = config.framework.get("mask_conditioned_transition", {}) if hasattr(config.framework, "get") else {}
         self.transition_enabled = trans_cfg.get("enable", False)
         if self.transition_enabled:
-            from laravla.model.modules.spatial_transition import (
-                VLMProjector, MaskTokenEncoder, MaskConditionedTransitionModule,
-                MaskDecoder, RelationHead, TransitionToActionProjector
-            )
-            vlm_dim = self.qwen_vl_interface.model.config.hidden_size  # 2560
+            vlm_dim = self.qwen_vl_interface.model.config.hidden_size
             self.transition_dim = trans_cfg.get("transition_dim", 512)
-            num_mask_tokens = trans_cfg.get("num_mask_tokens", 8)
-            num_transition_tokens = trans_cfg.get("num_transition_tokens", 6)
-            num_relation_labels = trans_cfg.get("num_relation_labels", 7)  # 0-6: 7 classes
-
-            self.vlm_projector = VLMProjector(vlm_dim=vlm_dim, transition_dim=self.transition_dim)
-            self.mask_token_encoder = MaskTokenEncoder(
-                in_channels=1, transition_dim=self.transition_dim, num_tokens=num_mask_tokens
-            )
-            self.transition_module = MaskConditionedTransitionModule(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens
-            )
-            self.future_mask_decoder = MaskDecoder(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
-                output_res=trans_cfg.get("mask_res", 56)
-            )
-            self.goal_mask_decoder = MaskDecoder(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
-                output_res=trans_cfg.get("mask_res", 56)
-            )
-            self.current_mask_decoder = MaskDecoder(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
-                output_res=trans_cfg.get("mask_res", 56)
-            )
-            self.relation_head = RelationHead(
-                transition_dim=self.transition_dim, num_transition_tokens=num_transition_tokens,
-                num_classes=num_relation_labels
-            )
-            # P2: project transition tokens back to VLM dim for action head
-            self.transition_to_action = TransitionToActionProjector(
-                transition_dim=self.transition_dim, vlm_dim=vlm_dim
-            )
-            from laravla.model.modules.spatial_transition import (
-                GatedTransitionActionAdapter, ProprioEncoder, DINOSpatialProjector
-            )
-            # 6 typed tokens + 2 spatial tokens (DINO subgoal + proprioception) = 8
-            adapter_num_tokens = num_transition_tokens + 2
-            self.transition_action_adapter = GatedTransitionActionAdapter(
-                transition_dim=self.transition_dim, num_transition_tokens=adapter_num_tokens,
-                vlm_dim=vlm_dim
-            )
-
-            # ── DINO encoder (frozen) + future head (trainable) ──
             dino_cfg = trans_cfg.get("dino", {})
-            dino_model = dino_cfg.get("model_name", "dinov2_vitb14")
             dino_dim = dino_cfg.get("dino_dim", 768)
-            num_dino_patches = dino_cfg.get("num_patches", 256)
+
+            # ── Unified spatial backbone (P1 and P2 share this) ──
             from laravla.model.modules.spatial_transition import (
-                SpatialDINOEncoder, DINOFutureHead
+                SpatialTransitionBackbone, GatedTransitionActionAdapter,
+                ProprioEncoder, DINOSpatialProjector, PosteriorTransitionEncoder,
+                SpatialDINOEncoder,
             )
+            gamma = trans_cfg.get("loss_weights", {}).get("slot_residual_gamma", 1.5)
+            self.spatial_backbone = SpatialTransitionBackbone(
+                vlm_dim=vlm_dim, hidden_dim=self.transition_dim,
+                num_slots=trans_cfg.get("num_transition_tokens", 6),
+                gamma=gamma,
+            )
+
+            # ── Frozen DINO encoder ──────────────────────────
             self.dino_encoder = SpatialDINOEncoder(
-                model_name=dino_model, freeze=True
-            )
-            self.dino_future_head = DINOFutureHead(
-                transition_dim=self.transition_dim,
-                dino_dim=dino_dim,
-                num_patches=num_dino_patches,
+                model_name=dino_cfg.get("model_name", "dinov2_vitb14"), freeze=True
             )
 
-            # ── Spatial stream components (Step 6A) ─────────
+            # ── Action spatial adapter ───────────────────────
             self.proprio_encoder = ProprioEncoder(
-                state_dim=7, transition_dim=self.transition_dim
-            )
+                state_dim=7, transition_dim=self.transition_dim)
             self.dino_spatial_projector = DINOSpatialProjector(
-                dino_dim=dino_dim, transition_dim=self.transition_dim
-            )
+                dino_dim=dino_dim, transition_dim=self.transition_dim)
+            adapter_num_tokens = trans_cfg.get("num_transition_tokens", 6) + 2
+            self.transition_action_adapter = GatedTransitionActionAdapter(
+                transition_dim=self.transition_dim,
+                num_transition_tokens=adapter_num_tokens, vlm_dim=vlm_dim)
 
-            # ── Posterior teacher encoder (Step 5) ──────────
-            from laravla.model.modules.spatial_transition import PosteriorTransitionEncoder
+            # ── Posterior teacher (Step 5) ────────────────────
             self.posterior_encoder = PosteriorTransitionEncoder(
-                dino_dim=dino_dim, transition_dim=self.transition_dim,
-            )
+                dino_dim=dino_dim, transition_dim=self.transition_dim)
+
+            # Legacy (unused, kept for compat)
+            self.mask_token_encoder = None
+            self.vlm_projector = None
+            self.transition_module = None
+            self.future_mask_decoder = None
+            self.goal_mask_decoder = None
+            self.current_mask_decoder = None
+            self.relation_head = None
+            self.dino_future_head = None
+            self.transition_to_action = None
 
             self.transition_loss_weights = trans_cfg.get("loss_weights", {
                 "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
                 "current_mask": 0.05, "dino_future": 0.05,
             })
         else:
-            self.vlm_projector = None
+            self.spatial_backbone = None
             self.mask_token_encoder = None
-            self.transition_module = None
-            self.future_mask_decoder = None
-            self.goal_mask_decoder = None
-            self.current_mask_decoder = None
-            self.relation_head = None
-            self.transition_to_action = None
             self.transition_action_adapter = None
             self.dino_encoder = None
-            self.dino_future_head = None
             self.posterior_encoder = None
             self.proprio_encoder = None
             self.dino_spatial_projector = None
@@ -655,108 +618,81 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 )
                 vlm_hidden = qwen_out.hidden_states[-1].float()
 
-            # ── Transition with slot identity residual ──────────
+            # ── Unified backbone forward ────────────────────────
             w = self.transition_loss_weights
-            vlm_proj = self.vlm_projector(vlm_hidden)
-            B = vlm_proj.shape[0]
-            q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
-                      + self.transition_module.type_embedding.expand(B, -1, -1))
-            transition_tokens = self.transition_module(vlm_proj, mask_tokens=None)
-            GAMMA = w.get("slot_residual_gamma", 1.5)
-            q_init_ln = F.layer_norm(q_init.float(), [q_init.shape[-1]])
-            z_typed = transition_tokens + GAMMA * q_init_ln
-            z_typed = F.layer_norm(z_typed.float(), [z_typed.shape[-1]])
+            spatial_out = self.spatial_backbone(vlm_hidden)
 
-            # ── Auxiliary spatial losses ─────────────────────────
-            current_tokens  = z_typed[:, 0:2, :]
-            future_tokens   = z_typed[:, 2:4, :]
-            goal_tokens     = z_typed[:, 4:5, :]
-            relation_tokens = z_typed[:, 5:6, :]
-
-            current_logits = self.current_mask_decoder(current_tokens)
-            future_logits = self.current_mask_decoder(future_tokens)
-            goal_logits = self.current_mask_decoder(goal_tokens)
-            rel_logits = self.relation_head(relation_tokens)
-            R = future_logits.shape[-1]
+            # ── Auxiliary spatial losses ─────────────────────
+            R = spatial_out.future_mask_logits.shape[-1]
             cur_gt = F.interpolate(cur_masks.float(), size=(R,R), mode='nearest').squeeze(1)
             future_gt = F.interpolate(future_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
             goal_gt = F.interpolate(goal_masks.unsqueeze(1), size=(R,R), mode='nearest').squeeze(1)
             trans_losses = transition_total_loss(
-                current_logits=current_logits, current_target=cur_gt,
-                future_logits=future_logits, future_target=future_gt,
-                goal_logits=goal_logits, goal_target=goal_gt,
-                relation_logits=rel_logits, relation_target=rel_ids,
-                w_current=w.get("current_mask",0.05),
-                w_future=w.get("future_mask",0.05),
-                w_goal=w.get("goal_mask",0.10),
-                w_relation=w.get("relation",0.05))
+                current_logits=spatial_out.current_mask_logits, current_target=cur_gt,
+                future_logits=spatial_out.future_mask_logits, future_target=future_gt,
+                goal_logits=spatial_out.goal_mask_logits, goal_target=goal_gt,
+                relation_logits=spatial_out.relation_logits, relation_target=rel_ids,
+                w_current=w.get("current_mask",0.05), w_future=w.get("future_mask",0.05),
+                w_goal=w.get("goal_mask",0.10), w_relation=w.get("relation",0.05))
 
-            # ── DINO future prediction (tau future, matches P1 training) ─
-            future_images_list = [ex.get("image_tau_future",
-                                         ex.get("image_next", None)) for ex in examples]
-            dino_future_loss = torch.tensor(0.0, device=vlm_hidden.device)
-            pred_dino = None
-            if self.dino_encoder is not None and self.dino_future_head is not None:
-                pred_dino = self.dino_future_head(future_tokens)  # [B, 256, 768]
+            # ── DINO future loss ─────────────────────────────
+            future_images_list = [ex.get("image_tau_future", ex.get("image_next", None)) for ex in examples]
+            dino_loss_val = torch.tensor(0.0, device=vlm_hidden.device)
+            dino_cos_val = torch.tensor(0.0, device=vlm_hidden.device)
+            if self.dino_encoder is not None and spatial_out.pred_future_dino is not None:
                 future_tensors = []
                 for i, fi in enumerate(future_images_list):
-                    if fi is not None and isinstance(fi, list) and len(fi) > 0:
-                        fi = fi[0]
+                    if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
                     if fi is not None:
-                        arr = np.array(fi, dtype=np.uint8)
-                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                        future_tensors.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
                     else:
-                        arr = np.array(examples[i]["image"][0], dtype=np.uint8)
-                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                        future_tensors.append(torch.from_numpy(np.array(examples[i]["image"][0], dtype=np.uint8)).permute(2,0,1))
                 future_rgb = torch.stack(future_tensors).to(vlm_hidden.device)
                 with torch.no_grad():
                     dino_target = self.dino_encoder(future_rgb)
-                from laravla.model.modules.spatial_transition import dino_cosine_loss, dino_cosine_similarity
-                dino_future_loss = dino_cosine_loss(pred_dino, dino_target)
-                dino_future_cos_p2 = dino_cosine_similarity(pred_dino, dino_target)
-            else:
-                dino_future_cos_p2 = torch.tensor(0.0)
+                from laravla.model.modules.spatial_transition import dino_future_cosine
+                dino_result = dino_future_cosine(spatial_out.pred_future_dino, dino_target)
+                if dino_result["loss"] is not None:
+                    dino_loss_val = dino_result["loss"]
+                if dino_result["cosine"] is not None:
+                    dino_cos_val = dino_result["cosine"]
 
-            # ── Gated adapter with spatial stream ─────────────────
-            # Build extended tokens: 6 typed + dino_subgoal + proprio
-            ext_tokens = z_typed  # [B, 6, 512]
-            if pred_dino is not None and self.dino_spatial_projector is not None:
-                dino_spatial = self.dino_spatial_projector(pred_dino)  # [B, 1, 512]
-                ext_tokens = torch.cat([ext_tokens, dino_spatial], dim=1)
+            # ── Spatial action stream ─────────────────────────
+            ext_tokens = [spatial_out.z_student]
+            if spatial_out.pred_future_dino is not None and self.dino_spatial_projector is not None:
+                ext_tokens.append(self.dino_spatial_projector(spatial_out.pred_future_dino))
             if state is not None and self.proprio_encoder is not None:
                 st = torch.tensor(np.array(state), device=vlm_hidden.device, dtype=vlm_hidden.dtype)
-                if st.ndim == 2:
-                    st = st.unsqueeze(1)
-                proprio_token = self.proprio_encoder(st)  # [B, 1, 512]
-                ext_tokens = torch.cat([ext_tokens, proprio_token], dim=1)
+                if st.ndim == 2: st = st.unsqueeze(1)
+                ext_tokens.append(self.proprio_encoder(st))
+            ext = torch.cat(ext_tokens, dim=1)
+            conditioned_vl = self.transition_action_adapter(vlm_hidden, ext)
 
-            conditioned_vl = self.transition_action_adapter(vlm_hidden, ext_tokens)
-
-            # ── Action loss ──────────────────────────────────────
+            # ── Action loss ──────────────────────────────────
             with torch.autocast("cuda", dtype=torch.float32):
                 actions_t = torch.tensor(np.array(actions), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
                 actions_target = actions_t[:, -(self.future_action_window_size+1):, :]
-                repeated_diffusion_steps = getattr(self.config.trainer, "repeated_diffusion_steps", 4) if self.config and hasattr(self.config, "trainer") else 4
-                actions_target_rep = actions_target.repeat(repeated_diffusion_steps, 1, 1)
-                conditioned_rep = conditioned_vl.repeat(repeated_diffusion_steps, 1, 1)
+                rds = getattr(self.config.trainer, "repeated_diffusion_steps", 4) if self.config and hasattr(self.config, "trainer") else 4
+                actions_target_rep = actions_target.repeat(rds, 1, 1)
+                conditioned_rep = conditioned_vl.repeat(rds, 1, 1)
                 state_rep = None
                 if state is not None:
                     st2 = torch.tensor(np.array(state), device=conditioned_vl.device, dtype=conditioned_vl.dtype)
                     if st2.ndim == 2: st2 = st2.unsqueeze(1)
-                    state_rep = st2.repeat(repeated_diffusion_steps, 1, 1)
+                    state_rep = st2.repeat(rds, 1, 1)
                 action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
 
-            total = action_loss + trans_losses["total_loss"] + w.get("dino_future", 0.05) * dino_future_loss
+            total = action_loss + trans_losses["total_loss"] + w.get("dino_future", 0.05) * dino_loss_val
             result = {
                 "action_loss": action_loss,
-                "dino_future_loss": dino_future_loss.detach(),
-                "dino_future_cos": dino_future_cos_p2.detach(),
+                "dino_future_loss": dino_loss_val.detach(),
+                "dino_future_cos": dino_cos_val.detach(),
                 "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
                 "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
                 "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),
                 "relation_loss": trans_losses.get("relation_loss", torch.tensor(0.0)),
                 "total_loss": total,
-                "transition_tokens": transition_tokens,
+                "transition_tokens": spatial_out.z_student,
             }
             return result
 
@@ -1040,30 +976,17 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         if state_t is not None and state_t.ndim == 2:
             state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
 
-        # ── Spatial stream conditioning (Step 6A) ──────────────
-        if self.transition_enabled and self.transition_module is not None:
+        # ── Spatial stream conditioning (unified backbone) ─────
+        if self.transition_enabled and self.spatial_backbone is not None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                vlm_proj = self.vlm_projector(last_hidden.float())
-                B = vlm_proj.shape[0]
-                q_init = (self.transition_module.transition_queries.expand(B, -1, -1)
-                          + self.transition_module.type_embedding.expand(B, -1, -1))
-                z_raw = self.transition_module(vlm_proj, mask_tokens=None)
-                GAMMA = self.transition_loss_weights.get("slot_residual_gamma", 1.5)
-                q_init_ln = torch.nn.functional.layer_norm(q_init.float(), [q_init.shape[-1]])
-                transition_tokens = torch.nn.functional.layer_norm(
-                    z_raw.float() + GAMMA * q_init_ln, [z_raw.shape[-1]])
-
-                # Build extended tokens: z_student + DINO subgoal + proprio
-                ext_tokens = transition_tokens  # [B, 6, 512]
-                if self.dino_future_head is not None:
-                    future_tokens = transition_tokens[:, 2:4, :]
-                    pred_dino = self.dino_future_head(future_tokens)  # [B, 256, 768]
-                    if self.dino_spatial_projector is not None:
-                        ext_tokens = torch.cat([ext_tokens, self.dino_spatial_projector(pred_dino)], dim=1)
+                spatial_out = self.spatial_backbone(last_hidden.float())
+                ext_tokens = [spatial_out.z_student]
+                if spatial_out.pred_future_dino is not None and self.dino_spatial_projector is not None:
+                    ext_tokens.append(self.dino_spatial_projector(spatial_out.pred_future_dino))
                 if state_t is not None and self.proprio_encoder is not None:
-                    ext_tokens = torch.cat([ext_tokens, self.proprio_encoder(state_t)], dim=1)
-
-                last_hidden = self.transition_action_adapter(last_hidden, ext_tokens)
+                    ext_tokens.append(self.proprio_encoder(state_t))
+                ext = torch.cat(ext_tokens, dim=1)
+                last_hidden = self.transition_action_adapter(last_hidden, ext)
 
         # Step 4: Action Expert Forward
         with torch.autocast("cuda", dtype=torch.float32):
