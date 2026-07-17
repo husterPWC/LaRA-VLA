@@ -79,8 +79,6 @@ class DINOSpatialProjector(nn.Module):
         Returns:
             [B, num_queries, transition_dim] spatial tokens
         """
-        # Normalize to unit norm — dino_future_head output scale varies,
-        # but spatial projector should work with direction, not magnitude.
         x = torch.nn.functional.normalize(pred_future_dino.float(), dim=-1)
         B = x.shape[0]
         x = self.patch_proj(x) + self.pos_embed[:, :x.shape[1], :]

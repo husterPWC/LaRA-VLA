@@ -510,47 +510,7 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_relation=w.get("relation", 0.05),
             )
 
-            # ── DINO future loss (Step 3) ─────────────────────
-            total = losses["total_loss"]
-            if self.dino_encoder is not None and self.dino_future_head is not None:
-                from laravla.model.modules.spatial_transition import (
-                    dino_cosine_loss, dino_cosine_similarity
-                )
-                # Extract future RGB images from batch
-                future_images_list = [ex.get("image_next", None) for ex in examples]
-                if any(fi is not None for fi in future_images_list):
-                    # Convert PIL → tensor [B, 3, 224, 224]
-                    future_tensors = []
-                    for fi in future_images_list:
-                        if fi is not None and isinstance(fi, list) and len(fi) > 0:
-                            fi = fi[0]  # primary view
-                        if fi is not None:
-                            arr = np.array(fi, dtype=np.uint8)
-                            future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                        else:
-                            # Fallback: use current image (degrade gracefully)
-                            arr = np.array(examples[future_images_list.index(fi)]["image"][0], dtype=np.uint8)
-                            future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                    future_rgb = torch.stack(future_tensors).to(
-                        self.qwen_vl_interface.model.device
-                    )  # [B, 3, 224, 224]
-
-                    # Frozen DINO → future target
-                    with torch.no_grad():
-                        dino_target = self.dino_encoder(future_rgb)  # [B, 256, 768]
-
-                    # Predict future DINO from transition tokens
-                    pred_dino = self.dino_future_head(transition_tokens)  # [B, 256, 768]
-
-                    L_dino = dino_cosine_loss(pred_dino, dino_target)
-                    cos_dino = dino_cosine_similarity(pred_dino, dino_target)
-
-                    w_dino = w.get("dino_future", 0.05)
-                    total = total + w_dino * L_dino
-                    losses["dino_future_loss"] = L_dino
-                    losses["dino_future_cos"] = cos_dino
-
-            losses["total_loss"] = total
+            losses["total_loss"] = losses["total_loss"]
             losses["transition_tokens"] = transition_tokens
             return losses
 
