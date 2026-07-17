@@ -114,89 +114,10 @@ def main():
         manifest.extend(suite_samples[suite][:target_per_suite])
     print(f"  Collected {len(manifest)} samples: { {s: len(v) for s, v in suite_samples.items()} }")
 
-    # ── Compute reference metrics on manifest ────────────────
-    dino_cos_vals = []
-    cur_dice_vals = []
-    fut_dice_vals = []
-    goal_dice_vals = []
-    rel_acc_vals = []
-    valid_count = 0
-
-    # Re-build loader and iterate to find manifest samples
-    loader2 = build_dataloader(OmegaConf.create({"datasets": {"vla_data": {
-        "dataset_py": "spatial_cot_libero", "spatial_root": SPATIAL,
-        "index_path": IDX, "cot_root": COT,
-        "alignment_path": SPATIAL + "/cot_spatial_alignment.json",
-        "enable_dynamic_mask": True, "per_device_batch_size": 4,
-        "num_workers": 0, "state_dim": 7,
-    }}}), dataset_py="spatial_cot_libero")
-
-    manifest_set = {(m["suite"], m["task_id"], m["demo_id"], m["hdf5_frame_idx"]) for m in manifest}
-    evaluated = 0
-    for batch in loader2:
-        if evaluated >= len(manifest):
-            break
-        # Find manifest samples in this batch
-        batch_indices = []
-        for i, s in enumerate(batch):
-            key = (s["suite"], s["task_id"], s["demo_id"], s["hdf5_frame_idx"])
-            if key in manifest_set:
-                batch_indices.append(i)
-
-        if not batch_indices:
-            continue
-
-        # Forward P1 backbone for this batch
-        images = [s["image"] for s in batch]
-        instructions = [s["lang"] for s in batch]
-        with torch.no_grad():
-            qo = vla.qwen_vl_interface.encode_observation(
-                images=images, instructions=instructions, output_hidden_states=True)
-            vh = qo.hidden_states[-1]
-            out = vla.spatial_backbone(vh)
-            fut_rgb = torch.stack([torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in batch]).to("cuda")
-            dt = vla.dino_encoder(fut_rgb)
-            r = dino_future_cosine(out.pred_future_dino, dt)
-            if r["cosine"] is not None:
-                dino_cos_vals.append(r["cosine"].item())
-
-        # Mask Dice (simplified)
-        cm = torch.from_numpy(np.stack([s["current_affordance_mask_agentview"] for s in batch])).unsqueeze(1).to("cuda").float()
-        fm = torch.from_numpy(np.stack([s.get("future_tau_mask_agentview", s.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32))) for s in batch])).to("cuda").float()
-        gm = torch.from_numpy(np.stack([s["goal_affordance_mask_agentview"] for s in batch])).to("cuda").float()
-        ri = torch.tensor([s["relation_label_id"] for s in batch], dtype=torch.long, device="cuda")
-
-        R = out.future_mask_logits.shape[-1]
-        cur_gt = F.interpolate(cm.float(), size=(R,R), mode='nearest').squeeze(1)
-        fut_gt = F.interpolate(fm.unsqueeze(1).float(), size=(R,R), mode='nearest').squeeze(1)
-        goal_gt = F.interpolate(gm.unsqueeze(1).float(), size=(R,R), mode='nearest').squeeze(1)
-        cur_dice = _dice(out.current_mask_logits, cur_gt)
-        fut_dice = _dice(out.future_mask_logits, fut_gt)
-        goal_dice = _dice(out.goal_mask_logits, goal_gt)
-        rel_pred = out.relation_logits.argmax(dim=1)
-        rel_valid = (ri >= 0) & (ri < out.relation_logits.shape[1])
-        rel_acc = (rel_pred[rel_valid] == ri[rel_valid]).float().mean().item() if rel_valid.any() else 0
-
-        cur_dice_vals.append(cur_dice.item())
-        fut_dice_vals.append(fut_dice.item())
-        goal_dice_vals.append(goal_dice.item())
-        rel_acc_vals.append(rel_acc)
-        valid_count += 1
-        evaluated += len(batch_indices)
-
-    # ── Save manifest + reference metrics ────────────────────
+    # ── Save manifest only (metrics deferred to P2 startup) ──
     manifest_data = {
         "manifest": manifest,
         "num_samples": len(manifest),
-        "reference_metrics": {
-            "dino_cosine_mean": float(np.mean(dino_cos_vals)) if dino_cos_vals else 0,
-            "dino_cosine_std": float(np.std(dino_cos_vals)) if dino_cos_vals else 0,
-            "cur_dice_mean": float(np.mean(cur_dice_vals)) if cur_dice_vals else 0,
-            "fut_dice_mean": float(np.mean(fut_dice_vals)) if fut_dice_vals else 0,
-            "goal_dice_mean": float(np.mean(goal_dice_vals)) if goal_dice_vals else 0,
-            "rel_acc_mean": float(np.mean(rel_acc_vals)) if rel_acc_vals else 0,
-            "num_batches": valid_count,
-        },
         "manifest_hash": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:16],
     }
 

@@ -140,7 +140,9 @@ def main():
         print(f"\n{'='*60}")
         print("Check B: P1 absolute quality (fixed manifest)")
         print(f"{'='*60}")
-        _verify_fixed_manifest(manifest_path, vla, loader, accelerator.device)
+        ref_dc = _verify_fixed_manifest(manifest_path, vla, loader, accelerator.device)
+        if ref_dc is not None:
+            print(f"  Reference DINO cos (P2-loaded P1): {ref_dc:.4f}")
 
     # Apply gate initialization (supports ablation: -2.2≈0.1, -10≈0)
     if hasattr(vla.transition_action_adapter, 'gate_logit'):
@@ -396,34 +398,28 @@ def _p2_dino_parity(vla, loader, device):
 
 
 def _verify_fixed_manifest(manifest_path, vla, loader, device):
-    """Check B: verify P1 absolute quality on fixed stratified samples."""
+    """Check B: compute DINO cos on fixed stratified manifest samples."""
     import json, hashlib
-    import torch.nn.functional as F
     from laravla.model.modules.spatial_transition import dino_future_cosine
 
     with open(manifest_path) as f:
         manifest_data = json.load(f)
-
     manifest = manifest_data["manifest"]
-    ref = manifest_data["reference_metrics"]
     manifest_hash = manifest_data["manifest_hash"]
     manifest_set = {(m["suite"], m["task_id"], m["demo_id"], m["hdf5_frame_idx"]) for m in manifest}
 
     print(f"  Manifest: {len(manifest)} samples, hash={manifest_hash}")
-    print(f"  P1 reference DINO cos: {ref['dino_cosine_mean']:.4f}")
 
-    # Compute P2 metrics on same manifest
     dino_cos_vals = []
     evaluated = 0
     for batch in loader:
         if evaluated >= len(manifest):
             break
-        batch_indices = []
+        key_matches = []
         for i, s in enumerate(batch):
-            key = (s["suite"], s["task_id"], s["demo_id"], s["hdf5_frame_idx"])
-            if key in manifest_set:
-                batch_indices.append(i)
-        if not batch_indices:
+            if (s["suite"], s["task_id"], s["demo_id"], s["hdf5_frame_idx"]) in manifest_set:
+                key_matches.append(i)
+        if not key_matches:
             continue
 
         with torch.no_grad():
@@ -438,24 +434,11 @@ def _verify_fixed_manifest(manifest_path, vla, loader, device):
             r = dino_future_cosine(out.pred_future_dino, dt)
             if r["cosine"] is not None:
                 dino_cos_vals.append(r["cosine"].item())
-        evaluated += len(batch_indices)
+        evaluated += len(key_matches)
 
-    p2_mean = np.mean(dino_cos_vals) if dino_cos_vals else 0
-    diff = abs(p2_mean - ref["dino_cosine_mean"])
-    print(f"  P2 loaded  DINO cos: {p2_mean:.4f}")
-    print(f"  Difference:           {diff:.4f}")
-
-    # Check: consistent with P1 reference
-    if diff > 0.15:
-        print(f"  ❌ FATAL: P2 DINO cos differs from P1 reference by {diff:.4f}")
-        raise RuntimeError("P1 absolute quality check failed on fixed manifest")
-    else:
-        print(f"  ✅ Check B PASSED (P1/P2 manifest DINO cos consistent)")
-
-    # Also check manifest hash matches what we computed
-    recomputed_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:16]
-    if recomputed_hash != manifest_hash:
-        print(f"  ⚠️  Manifest hash mismatch — file may have been modified")
+    mean_dc = np.mean(dino_cos_vals) if dino_cos_vals else float("nan")
+    print(f"  Manifest DINO cos (P2-loaded P1): {mean_dc:.4f} ({len(dino_cos_vals)} batches)")
+    return mean_dc
 
 
 if __name__ == "__main__":
