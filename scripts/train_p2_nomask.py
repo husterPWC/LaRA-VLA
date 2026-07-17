@@ -338,13 +338,8 @@ def _p2_dino_parity(vla, loader, device):
         with torch.no_grad():
             qo = vla.qwen_vl_interface.encode_observation(images=images, instructions=instructions, output_hidden_states=True)
             vh = qo.hidden_states[-1]
-        # Tau future DINO target
-        fimgs = [s.get(dino_key, s.get('image_next', None)) for s in batch]
-        ft = []
-        for i, fi in enumerate(fimgs):
-            if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
-            if fi is not None: ft.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
-            else: ft.append(torch.from_numpy(np.array(images[i][0], dtype=np.uint8)).permute(2,0,1))
+        # Tau future DINO target (raw uint8, no PIL round-trip)
+        ft = [torch.from_numpy(s['image_tau_future_raw']).permute(2,0,1) for s in batch]
         with torch.no_grad():
             dt = vla.dino_encoder(torch.stack(ft).to(device))
         # P1 reference
@@ -367,9 +362,12 @@ def _p2_dino_parity(vla, loader, device):
     avg_p2 = np.mean(dino_cos_p2) if dino_cos_p2 else 0
     diff = abs(avg_p1 - avg_p2)
     print(f"  P1 ref DINO cos={avg_p1:.4f}  P2 internal DINO cos={avg_p2:.4f}  |diff|={diff:.4f}")
+    if avg_p1 < 0.70:
+        print(f"  ❌ FATAL: P1 future DINO cos={avg_p1:.4f} < 0.70")
+        print(f"  P2 training aborted — P1 checkpoint lacks valid future DINO capability.")
+        raise RuntimeError("P1 future DINO capability invalid; P2 training aborted.")
     if diff < 0.05:
-        print(f"  ✅ P2 DINO parity PASSED (P1≈P2, consistent)")
-        print(f"  Note: low DINO cos on early batches is normal; P1 best reaches ~0.8 on eval")
+        print(f"  ✅ P2 DINO parity PASSED (P1≈P2, DINO cos≥0.70)")
     else:
         print(f"  ❌ P2 DINO cos differs from P1 by {diff:.4f} — check P1→P2 interface")
     vla.train()
