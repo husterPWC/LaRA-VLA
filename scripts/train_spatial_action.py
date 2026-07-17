@@ -59,10 +59,8 @@ def phase1_train(args, vla, loader, output_dir):
         vlm_dim=vla.qwen_vl_interface.model.config.hidden_size,
         hidden_dim=512, num_slots=6, gamma=args.gamma,
     )
-    posterior = vla.posterior_encoder
     p1_model = P1NoMaskWrapper(
-        backbone=backbone, posterior_encoder=posterior,
-        loss_weights=vla.transition_loss_weights,
+        backbone=backbone, loss_weights=vla.transition_loss_weights,
     ).to("cuda")
     for p in p1_model.parameters():
         p.requires_grad_(True)

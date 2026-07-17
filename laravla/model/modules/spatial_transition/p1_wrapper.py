@@ -78,11 +78,9 @@ class P1NoMaskWrapper(nn.Module):
         → backbone params stored as "backbone.*" keys.
     """
 
-    def __init__(self, backbone, posterior_encoder=None,
-                 loss_weights=None, mask_res=56):
+    def __init__(self, backbone, loss_weights=None, mask_res=56):
         super().__init__()
         self.backbone = backbone
-        self.posterior_encoder = posterior_encoder
         self.loss_weights = loss_weights or {}
         self.mask_res = mask_res
         self.register_buffer('_distill_step', torch.tensor(0, dtype=torch.long))
