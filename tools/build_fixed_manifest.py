@@ -102,6 +102,7 @@ def main():
                     "hdf5_frame_idx": s.get("hdf5_frame_idx", -1),
                     "hdf5_tau_future_idx": s.get("hdf5_tau_future_idx", -1),
                     "tau_future_valid": bool(s.get("tau_future_valid", True)),
+                    "instruction": s.get("lang", ""),
                 }
                 suite_samples[suite].append(sample_id)
 

@@ -227,7 +227,12 @@ class _QWen3_VL_Interface(nn.Module):
         if new_vocab_size > old_vocab_size:
             logger.info(f"Resizing model embeddings from {old_vocab_size} to {new_vocab_size}")
             self.model.resize_token_embeddings(new_vocab_size)
-        
+            # Deterministic init: new rows = mean of existing embeddings
+            with torch.no_grad():
+                emb = self.model.get_input_embeddings().weight
+                base_mean = emb[:old_vocab_size].mean(dim=0)
+                emb[old_vocab_size:].copy_(base_mean)
+
         thinking_token_id = tokenizer.convert_tokens_to_ids(thinking_token)
         start_thinking_id = tokenizer.convert_tokens_to_ids(start_token)
         end_thinking_id = tokenizer.convert_tokens_to_ids(end_token)
@@ -301,6 +306,11 @@ class _QWen3_VL_Interface(nn.Module):
         if new_vocab_size > old_vocab_size:
             logger.info(f"Resizing embeddings for img_next from {old_vocab_size} to {new_vocab_size}")
             self.model.resize_token_embeddings(new_vocab_size)
+            # Deterministic init
+            with torch.no_grad():
+                emb = self.model.get_input_embeddings().weight
+                base_mean = emb[:old_vocab_size].mean(dim=0)
+                emb[old_vocab_size:].copy_(base_mean)
 
         img_next_token_id = tokenizer.convert_tokens_to_ids(img_next_token)
         if img_next_token_id == tokenizer.unk_token_id:
