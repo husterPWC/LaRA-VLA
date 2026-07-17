@@ -110,20 +110,19 @@ def main():
     raw_ckpt = torch.load(args.p1_ckpt, map_location="cpu")
     p1_state = raw_ckpt.get("p1_state_dict", raw_ckpt)
 
-    # Restore VLM contract (fixes cross-process hidden mismatch)
-    if "vlm_contract" in raw_ckpt:
-        from laravla.model.framework.vlm_contract import restore_vlm_contract
-        ok = restore_vlm_contract(vla, raw_ckpt["vlm_contract"])
-        if ok and accelerator.is_main_process:
-            print(f"  VLM contract restored: full embedding matrix, hash verified")
-    elif "vlm_token_embeddings" in raw_ckpt:
-        # Legacy fallback
-        vlm_embeds = raw_ckpt["vlm_token_embeddings"]
-        current_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
-        if vlm_embeds.shape == current_embeds.shape:
-            current_embeds.copy_(vlm_embeds)
-            if accelerator.is_main_process:
-                print(f"  VLM embeddings restored (legacy, {vlm_embeds.shape[0]} tokens)")
+    # Restore VLM contract — must be present and valid, or abort
+    if "vlm_contract" not in raw_ckpt:
+        raise RuntimeError(
+            "P1 checkpoint missing 'vlm_contract'. Re-train P1 with current code "
+            "(contract saves full embedding matrix for cross-process consistency).")
+    from laravla.model.framework.vlm_contract import restore_vlm_contract
+    ok = restore_vlm_contract(vla, raw_ckpt["vlm_contract"])
+    if accelerator.is_main_process:
+        import hashlib
+        ckpt_hash = hashlib.sha256(
+            open(args.p1_ckpt, 'rb').read()).hexdigest()[:16]
+        print(f"  VLM contract restored (v2 full matrix), hash={raw_ckpt['vlm_contract']['embedding_hash']}")
+        print(f"  Checkpoint SHA256: {ckpt_hash}")
 
     # Backbone keys in P1 checkpoint are "backbone.*" — load directly
     backbone_state = {k.replace("backbone.", ""): v

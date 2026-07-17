@@ -405,7 +405,10 @@ def main():
                     }
                     torch.save(ckpt_data, str(output_dir / "best_model.pt"))
                     torch.save(ckpt_data, str(output_dir / "best_student.pt"))
-                    print(f"  🏆 Best student (score={student_score:.4f})")
+                    import hashlib
+                    ckpt_hash = hashlib.sha256(
+                        open(str(output_dir / "best_student.pt"), 'rb').read()).hexdigest()[:16]
+                    print(f"  🏆 Best student (score={student_score:.4f})  SHA256={ckpt_hash}")
 
     # ── Final ───────────────────────────────────────────────
     accelerator.wait_for_everyone()
