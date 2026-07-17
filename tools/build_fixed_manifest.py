@@ -127,21 +127,9 @@ def main():
         json.dump(manifest_data, f, indent=2)
 
     print(f"\n{'='*60}")
-    print(f"Reference metrics on {valid_count} batches ({len(manifest)} samples):")
-    for k, v in manifest_data["reference_metrics"].items():
-        print(f"  {k}: {v:.4f}")
+    print(f"Manifest saved: {len(manifest)} samples")
     print(f"  manifest_hash: {manifest_data['manifest_hash']}")
     print(f"  Saved to: {output_path}")
-
-
-def _dice(logits, target, eps=1e-6):
-    pred = (torch.sigmoid(logits) > 0.5).float()
-    if target.dim() == 2: target = target.unsqueeze(1)
-    elif target.dim() == 3: target = target.unsqueeze(1)
-    inter = (pred * target).sum()
-    union = pred.sum() + target.sum()
-    return (2.0 * inter + eps) / (union + eps)
-
 
 if __name__ == "__main__":
     main()
