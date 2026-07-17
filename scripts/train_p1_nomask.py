@@ -393,11 +393,12 @@ def main():
                 if student_score > best_eval:
                     best_eval = student_score
                     unwrapped = accelerator.unwrap_model(p1_model)
-                    # Save VLM token embeddings to fix cross-process VLM hidden mismatch
-                    vlm_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
+                    # Save VLM contract to fix cross-process VLM hidden mismatch
+                    from laravla.model.framework.vlm_contract import build_vlm_contract
+                    vlm_contract = build_vlm_contract(vla)
                     ckpt_data = {
                         "p1_state_dict": unwrapped.state_dict(),
-                        "vlm_token_embeddings": vlm_embeds.cpu().clone(),
+                        "vlm_contract": vlm_contract,
                     }
                     torch.save(ckpt_data, str(output_dir / "best_model.pt"))
                     torch.save(ckpt_data, str(output_dir / "best_student.pt"))
@@ -407,10 +408,10 @@ def main():
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unwrapped = accelerator.unwrap_model(p1_model)
-        vlm_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
+        from laravla.model.framework.vlm_contract import build_vlm_contract
         torch.save({
             "p1_state_dict": unwrapped.state_dict(),
-            "vlm_token_embeddings": vlm_embeds.cpu().clone(),
+            "vlm_contract": build_vlm_contract(vla),
         }, str(output_dir / "final_model.pt"))
         print(f"\n{'='*60}\nP1-New Complete\n  Best val: {best_eval:.4f}\n"
               f"  Time: {(time.time()-t0)/60:.0f}min\n{'='*60}")

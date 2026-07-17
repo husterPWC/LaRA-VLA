@@ -110,17 +110,20 @@ def main():
     raw_ckpt = torch.load(args.p1_ckpt, map_location="cpu")
     p1_state = raw_ckpt.get("p1_state_dict", raw_ckpt)
 
-    # Restore VLM token embeddings (fixes cross-process hidden mismatch)
-    if "vlm_token_embeddings" in raw_ckpt:
+    # Restore VLM contract (fixes cross-process hidden mismatch)
+    if "vlm_contract" in raw_ckpt:
+        from laravla.model.framework.vlm_contract import restore_vlm_contract
+        ok = restore_vlm_contract(vla, raw_ckpt["vlm_contract"])
+        if ok and accelerator.is_main_process:
+            print(f"  VLM contract restored: 4 special tokens, hash verified")
+    elif "vlm_token_embeddings" in raw_ckpt:
+        # Legacy fallback
         vlm_embeds = raw_ckpt["vlm_token_embeddings"]
         current_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
         if vlm_embeds.shape == current_embeds.shape:
             current_embeds.copy_(vlm_embeds)
             if accelerator.is_main_process:
-                print(f"  VLM token embeddings restored ({vlm_embeds.shape[0]} tokens)")
-        else:
-            if accelerator.is_main_process:
-                print(f"  WARNING: VLM embedding shape mismatch: saved={vlm_embeds.shape} current={current_embeds.shape}")
+                print(f"  VLM embeddings restored (legacy, {vlm_embeds.shape[0]} tokens)")
 
     # Backbone keys in P1 checkpoint are "backbone.*" — load directly
     backbone_state = {k.replace("backbone.", ""): v
