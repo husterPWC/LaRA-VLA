@@ -37,7 +37,7 @@ def build_vlm_contract(vla) -> dict:
 
     Returns a dict that can be serialized alongside the backbone checkpoint.
     """
-    tokenizer = vla.qwen_vl_interface.tokenizer
+    tokenizer = vla.qwen_vl_interface.processor.tokenizer
     embed = vla.qwen_vl_interface.model.get_input_embeddings()
     embed_weight = embed.weight.data
 
@@ -76,7 +76,7 @@ def restore_vlm_contract(vla, contract: dict) -> bool:
             f"VLM contract version mismatch: saved={contract.get('contract_version')}, "
             f"expected={CONTRACT_VERSION}")
 
-    tokenizer = vla.qwen_vl_interface.tokenizer
+    tokenizer = vla.qwen_vl_interface.processor.tokenizer
     embed = vla.qwen_vl_interface.model.get_input_embeddings()
     embed_weight = embed.weight.data
 
