@@ -129,7 +129,7 @@ def phase1_train(args, vla, loader, output_dir):
                     eval_gd.append(eo["goal_dice"].item())
                     eval_ra.append(eo["relation_acc"].item())
             avg_score = (np.mean(eval_cd)+np.mean(eval_fd)+np.mean(eval_gd))/3 + 0.2*np.mean(eval_ra)
-            print(f"  📊 Eval {step+1}: C={np.mean(eval_cd):.3f} F={np.mean(eval_fd):.3f} G={np.mean(eval_gd):.3f} score={avg_score:.3f}")
+            print(f"  📊 Eval {step+1}: CurDice={np.mean(eval_cd):.3f} FutDice={np.mean(eval_fd):.3f} GoalDice={np.mean(eval_gd):.3f} RelAcc={np.mean(eval_ra):.3f} P1Score={avg_score:.3f}")
             if avg_score > best_score:
                 best_score = avg_score
                 best_state = {k: v.cpu().clone() for k, v in p1_model.state_dict().items()}
@@ -253,8 +253,10 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
 
         al = out.get("action_loss", torch.tensor(0)).item()
         gate = torch.sigmoid(vla.transition_action_adapter.gate_logit).item()
+        gate_grad = vla.transition_action_adapter.gate_logit.grad
+        ggrad = gate_grad.item() if gate_grad is not None else 0.0
         if step % 50 == 0 or step == args.p2_steps - 1:
-            print(f"  P2 {step:4d}: action={al:.4f} gate={gate:.3f} lr={sched.get_last_lr()[0]:.2e}")
+            print(f"  P2 {step:4d}: action={al:.4f} gate={gate:.3f} gate_grad={ggrad:.2e} lr={sched.get_last_lr()[0]:.2e}")
 
         if (step + 1) % args.eval_interval == 0:
             vla.eval()

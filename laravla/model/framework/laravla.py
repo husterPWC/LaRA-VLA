@@ -593,7 +593,6 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
             total = action_loss
             result = {
                 "action_loss": action_loss,
-                "dino_future_cos": dino_cos_val.detach(),
                 "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
                 "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
                 "goal_mask_loss": trans_losses.get("goal_mask_loss", torch.tensor(0.0)),

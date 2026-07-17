@@ -44,50 +44,6 @@ class ProprioEncoder(nn.Module):
         return self.encoder(state.float()).unsqueeze(1)
 
 
-class DINOSpatialProjector(nn.Module):
-    """
-    Project predicted future DINO features → [B, num_queries, transition_dim].
-    Upgraded from mean-pool [B,1,512] to spatial resampler that preserves
-    spatial structure via per-patch projection + 2D position embedding.
-    """
-
-    def __init__(self, dino_dim: int = 768, transition_dim: int = 512,
-                 num_queries: int = 16, num_patches: int = 256,
-                 num_heads: int = 8):
-        super().__init__()
-        self.num_queries = num_queries
-
-        # Per-patch projection: 768 → 512
-        self.patch_proj = nn.Sequential(
-            nn.Linear(dino_dim, transition_dim),
-            nn.LayerNorm(transition_dim),
-        )
-        # 2D position embedding for 16×16 patches
-        self.pos_embed = nn.Parameter(torch.randn(1, num_patches, transition_dim) * 0.02)
-
-        # Cross-attention resampler: 16 queries attend to 256 patches
-        self.queries = nn.Parameter(torch.randn(1, num_queries, transition_dim) * 0.02)
-        self.cross_attn = nn.MultiheadAttention(
-            embed_dim=transition_dim, num_heads=num_heads, batch_first=True)
-        self.norm = nn.LayerNorm(transition_dim)
-
-    def forward(self, pred_future_dino):
-        """
-        Args:
-            pred_future_dino: [B, 256, 768] predicted DINO patch features
-
-        Returns:
-            [B, num_queries, transition_dim] spatial tokens
-        """
-        x = torch.nn.functional.normalize(pred_future_dino.float(), dim=-1)
-        B = x.shape[0]
-        x = self.patch_proj(x) + self.pos_embed[:, :x.shape[1], :]
-        # Resample: 16 queries cross-attend to 256 patches
-        q = self.queries.expand(B, -1, -1)
-        out, _ = self.cross_attn(query=q, key=x, value=x)
-        return self.norm(out)
-
-
 class GatedTransitionActionAdapter(nn.Module):
     """
     Inject transition tokens + spatial tokens into VLM action context.
