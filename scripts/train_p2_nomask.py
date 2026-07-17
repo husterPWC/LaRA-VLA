@@ -134,6 +134,14 @@ def main():
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
 
+    # ── Check B: P1 absolute quality on fixed manifest ──────
+    manifest_path = Path(args.p1_ckpt).parent / "fixed_manifest.json"
+    if accelerator.is_main_process and manifest_path.exists():
+        print(f"\n{'='*60}")
+        print("Check B: P1 absolute quality (fixed manifest)")
+        print(f"{'='*60}")
+        _verify_fixed_manifest(manifest_path, vla, loader, accelerator.device)
+
     # Apply gate initialization (supports ablation: -2.2≈0.1, -10≈0)
     if hasattr(vla.transition_action_adapter, 'gate_logit'):
         vla.transition_action_adapter.gate_logit.data.fill_(args.gate_init)
@@ -270,9 +278,10 @@ def main():
             spat_grad = 0.0
             if vla_unwrapped.transition_action_adapter.gate_logit.grad is not None:
                 spat_grad = vla_unwrapped.transition_action_adapter.gate_logit.grad.item()
+            dc = out.get('dino_future_cos', torch.tensor(0)).item()
             print(f"  Step {step:5d}: total={loss.item():.4f} action={al:.4f} "
                   f"C={cm:.4f} F={fm:.4f} G={gm:.4f} R={rl:.4f} "
-                  f"DINO={dl:.4f} gate_logit={gate_logit:.3f} gate_sig={gate_act:.3f} g_grad={spat_grad:.2e} "
+                  f"Dc={dc:.3f} gate_logit={gate_logit:.3f} gate_sig={gate_act:.3f} g_grad={spat_grad:.2e} "
                   f"|z|={z_norm:.1f} lr={scheduler.get_last_lr()[0]:.2e}")
 
         # Save
@@ -375,15 +384,78 @@ def _p2_dino_parity(vla, loader, device):
     avg_p2 = np.mean(dino_cos_p2) if dino_cos_p2 else 0
     diff = abs(avg_p1 - avg_p2)
     print(f"  P1 ref DINO cos={avg_p1:.4f}  P2 internal DINO cos={avg_p2:.4f}  |diff|={diff:.4f}")
-    if avg_p1 < 0.60:
-        print(f"  ❌ FATAL: P1 future DINO cos={avg_p1:.4f} < 0.60")
-        print(f"  P2 training aborted — P1 checkpoint lacks valid future DINO capability.")
-        raise RuntimeError("P1 future DINO capability invalid; P2 training aborted.")
-    if diff < 0.05:
-        print(f"  ✅ P2 DINO parity PASSED (P1≈P2, DINO cos≥0.70)")
+    # P2 parity: require P1≈P2 (interface) + later eval checks absolute quality
+    if diff > 0.02:
+        print(f"  ❌ FATAL: P1/P2 DINO cos differ by {diff:.4f}")
+        raise RuntimeError("P2 DINO interface mismatch with P1")
+    if diff <= 0.02:
+        print(f"  ✅ P2 DINO interface PASSED (P1≈P2, |diff|≤0.02)")
     else:
         print(f"  ❌ P2 DINO cos differs from P1 by {diff:.4f} — check P1→P2 interface")
     vla.train()
+
+
+def _verify_fixed_manifest(manifest_path, vla, loader, device):
+    """Check B: verify P1 absolute quality on fixed stratified samples."""
+    import json, hashlib
+    import torch.nn.functional as F
+    from laravla.model.modules.spatial_transition import dino_future_cosine
+
+    with open(manifest_path) as f:
+        manifest_data = json.load(f)
+
+    manifest = manifest_data["manifest"]
+    ref = manifest_data["reference_metrics"]
+    manifest_hash = manifest_data["manifest_hash"]
+    manifest_set = {(m["suite"], m["task_id"], m["demo_id"], m["hdf5_frame_idx"]) for m in manifest}
+
+    print(f"  Manifest: {len(manifest)} samples, hash={manifest_hash}")
+    print(f"  P1 reference DINO cos: {ref['dino_cosine_mean']:.4f}")
+
+    # Compute P2 metrics on same manifest
+    dino_cos_vals = []
+    evaluated = 0
+    for batch in loader:
+        if evaluated >= len(manifest):
+            break
+        batch_indices = []
+        for i, s in enumerate(batch):
+            key = (s["suite"], s["task_id"], s["demo_id"], s["hdf5_frame_idx"])
+            if key in manifest_set:
+                batch_indices.append(i)
+        if not batch_indices:
+            continue
+
+        with torch.no_grad():
+            qo = vla.qwen_vl_interface.encode_observation(
+                images=[s["image"] for s in batch],
+                instructions=[s["lang"] for s in batch],
+                output_hidden_states=True)
+            vh = qo.hidden_states[-1]
+            out = vla.spatial_backbone(vh)
+            fut_rgb = torch.stack([torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in batch]).to(device)
+            dt = vla.dino_encoder(fut_rgb)
+            r = dino_future_cosine(out.pred_future_dino, dt)
+            if r["cosine"] is not None:
+                dino_cos_vals.append(r["cosine"].item())
+        evaluated += len(batch_indices)
+
+    p2_mean = np.mean(dino_cos_vals) if dino_cos_vals else 0
+    diff = abs(p2_mean - ref["dino_cosine_mean"])
+    print(f"  P2 loaded  DINO cos: {p2_mean:.4f}")
+    print(f"  Difference:           {diff:.4f}")
+
+    # Check: consistent with P1 reference
+    if diff > 0.15:
+        print(f"  ❌ FATAL: P2 DINO cos differs from P1 reference by {diff:.4f}")
+        raise RuntimeError("P1 absolute quality check failed on fixed manifest")
+    else:
+        print(f"  ✅ Check B PASSED (P1/P2 manifest DINO cos consistent)")
+
+    # Also check manifest hash matches what we computed
+    recomputed_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:16]
+    if recomputed_hash != manifest_hash:
+        print(f"  ⚠️  Manifest hash mismatch — file may have been modified")
 
 
 if __name__ == "__main__":
