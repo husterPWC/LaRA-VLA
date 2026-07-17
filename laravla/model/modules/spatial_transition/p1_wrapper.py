@@ -83,7 +83,6 @@ class P1NoMaskWrapper(nn.Module):
         self.backbone = backbone
         self.loss_weights = loss_weights or {}
         self.mask_res = mask_res
-        self.register_buffer('_distill_step', torch.tensor(0, dtype=torch.long))
 
     def forward(self, vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
                 tau_future_valid=None):
@@ -148,6 +147,11 @@ class P1NoMaskWrapper(nn.Module):
             "latent_norm_mean": out.z_student.float().norm(dim=-1).mean(),
             "latent_norm_std": out.z_student.float().norm(dim=-1).std(),
             "transition_tokens": out.z_student,
+            # Raw logits for phase switch parity checks
+            "current_mask_logits": out.current_mask_logits,
+            "future_mask_logits": out.future_mask_logits,
+            "goal_mask_logits": out.goal_mask_logits,
+            "relation_logits": out.relation_logits,
         })
         return result
 

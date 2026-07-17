@@ -11,11 +11,12 @@ Usage:
     python scripts/train_spatial_action.py --p1-steps 2000 --p2-steps 500
 """
 
-import argparse, json, os, sys, time
+import argparse, hashlib, json, os, sys, time
 from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Subset
 
 _THIS = Path(__file__).resolve()
 _REPO = _THIS.parents[1]
@@ -37,6 +38,9 @@ def build_model(args):
     from laravla.model.tools import read_mode_config
     from omegaconf import OmegaConf
     model_cfg, _ = read_mode_config(Path(CKPT))
+    # Disable latent reasoning + img_next — not used in spatial training path
+    model_cfg["framework"]["enable_latent_reasoning"] = False
+    model_cfg["framework"]["img_next"] = {"enable": False}
     model_cfg["framework"]["mask_conditioned_transition"] = {
         "enable": True, "num_transition_tokens": 6,
         "mask_res": 56, "num_relation_labels": 7, "transition_dim": 512,
@@ -50,7 +54,23 @@ def build_model(args):
     return vla
 
 
-def phase1_train(args, vla, loader, output_dir):
+def _param_hash(module):
+    """SHA256 hash of all parameters in a module (for freeze verification)."""
+    h = hashlib.sha256()
+    for p in module.parameters():
+        h.update(p.detach().cpu().float().numpy().tobytes())
+    return h.hexdigest()[:16]
+
+
+def _param_max_diff(mod_a, mod_b):
+    """Maximum absolute difference between two modules' parameters."""
+    max_d = 0.0
+    for (_, pa), (_, pb) in zip(mod_a.named_parameters(), mod_b.named_parameters()):
+        max_d = max(max_d, (pa - pb).abs().max().item())
+    return max_d
+
+
+def phase1_train(args, vla, loader, eval_loader, output_dir):
     """Train SpatialTransitionBackbone."""
     from laravla.model.modules.spatial_transition import (
         SpatialTransitionBackbone, P1NoMaskWrapper
@@ -73,6 +93,7 @@ def phase1_train(args, vla, loader, output_dir):
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.p1_steps, eta_min=args.p1_lr * 0.01)
 
     best_score = -float("inf")
+    best_step = -1
     best_state = None
     t0 = time.time()
     data_iter = iter(loader)
@@ -106,15 +127,13 @@ def phase1_train(args, vla, loader, output_dir):
             fd = out.get("future_dice", torch.tensor(0)).item()
             print(f"  P1 {step:4d}: loss={loss.item():.4f}  C={cd:.2f} F={fd:.2f}  lr={sched.get_last_lr()[0]:.2e}")
 
-        # Eval + save best
+        # Eval + save best (fixed eval set, fixed seed)
         if (step + 1) % args.eval_interval == 0:
             p1_model.eval()
+            torch.manual_seed(42); torch.cuda.manual_seed(42)
             eval_cd, eval_fd, eval_gd, eval_ra = [], [], [], []
-            eval_iter = iter(loader)
             with torch.no_grad():
-                for _ in range(min(args.eval_batches, 50)):
-                    try: eb = next(eval_iter)
-                    except StopIteration: break
+                for eb in eval_loader:
                     ecm = torch.from_numpy(np.stack([s["current_affordance_mask_agentview"] for s in eb])).unsqueeze(1).to("cuda").float()
                     efm = torch.from_numpy(np.stack([s.get("future_tau_mask_agentview", s.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32))) for s in eb])).to("cuda").float()
                     egm = torch.from_numpy(np.stack([s["goal_affordance_mask_agentview"] for s in eb])).to("cuda").float()
@@ -130,11 +149,49 @@ def phase1_train(args, vla, loader, output_dir):
             print(f"  📊 Eval {step+1}: CurDice={np.mean(eval_cd):.3f} FutDice={np.mean(eval_fd):.3f} GoalDice={np.mean(eval_gd):.3f} RelAcc={np.mean(eval_ra):.3f} P1Score={avg_score:.3f}")
             if avg_score > best_score:
                 best_score = avg_score
+                best_step = step + 1
                 best_state = {k: v.cpu().clone() for k, v in p1_model.state_dict().items()}
-                print(f"  🏆 Best P1 (score={best_score:.4f})")
+                print(f"  🏆 Best P1 (step={best_step}, score={best_score:.4f})")
             p1_model.train()
 
-    print(f"\n  P1 Complete. Best score={best_score:.4f}  Time: {(time.time()-t0)/60:.0f}min")
+    print(f"\n  P1 Complete. Best score={best_score:.4f} at step {best_step}  Time: {(time.time()-t0)/60:.0f}min")
+
+    # ── Check 1: Restore best P1 explicitly ─────────────────
+    if best_state is not None:
+        current_keys = set(p1_model.state_dict().keys())
+        best_keys = set(best_state.keys())
+        missing = best_keys - current_keys
+        unexpected = current_keys - best_keys
+        p1_model.load_state_dict(best_state)
+        print(f"  🔄 Restored best P1: step={best_step}, score={best_score:.4f}")
+        print(f"     strict load: missing={len(missing)}, unexpected={len(unexpected)}")
+        if missing:
+            print(f"     WARNING missing keys: {sorted(missing)[:10]}")
+        if unexpected:
+            print(f"     WARNING unexpected keys: {sorted(unexpected)[:10]}")
+
+        # Re-evaluate on fixed set to confirm
+        p1_model.eval()
+        torch.manual_seed(42); torch.cuda.manual_seed(42)
+        re_cd, re_fd, re_gd, re_ra = [], [], [], []
+        with torch.no_grad():
+            for eb in eval_loader:
+                ecm = torch.from_numpy(np.stack([s["current_affordance_mask_agentview"] for s in eb])).unsqueeze(1).to("cuda").float()
+                efm = torch.from_numpy(np.stack([s.get("future_tau_mask_agentview", s.get("future_affordance_mask_agentview", np.zeros((224,224),dtype=np.float32))) for s in eb])).to("cuda").float()
+                egm = torch.from_numpy(np.stack([s["goal_affordance_mask_agentview"] for s in eb])).to("cuda").float()
+                eri = torch.tensor([s["relation_label_id"] for s in eb], dtype=torch.long, device="cuda")
+                qo = vla.qwen_vl_interface.encode_observation(images=[s["image"] for s in eb], instructions=[s["lang"] for s in eb], output_hidden_states=True)
+                evh = qo.hidden_states[-1]
+                eo = p1_model(evh, ecm, efm, egm, eri)
+                re_cd.append(eo["current_dice"].item())
+                re_fd.append(eo["future_dice"].item())
+                re_gd.append(eo["goal_dice"].item())
+                re_ra.append(eo["relation_acc"].item())
+        re_score = (np.mean(re_cd)+np.mean(re_fd)+np.mean(re_gd))/3 + 0.2*np.mean(re_ra)
+        print(f"     Re-eval after restore: CurDice={np.mean(re_cd):.3f} FutDice={np.mean(re_fd):.3f} GoalDice={np.mean(re_gd):.3f} RelAcc={np.mean(re_ra):.3f} P1Score={re_score:.3f}")
+        delta = abs(re_score - best_score)
+        print(f"     Score delta vs best: {delta:.4f} {'✅' if delta < 0.05 else '❌'}")
+
     return best_state, p1_model
 
 
@@ -160,12 +217,14 @@ def phase_switch_parity(vla, p1_model, loader):
     p1_model.eval()
     out_before = p1_model(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids)
 
-    # Save reference tensors
+    # Save reference tensors (all 6 checks)
     ref = {
+        "vlm_hidden": vlm_hidden.clone(),
         "z_student": out_before["transition_tokens"].clone(),
-        "current_dice": out_before["current_dice"].clone(),
-        "future_dice": out_before["future_dice"].clone(),
-        "goal_dice": out_before["goal_dice"].clone(),
+        "current_logits": out_before["current_mask_logits"].clone(),
+        "future_logits": out_before["future_mask_logits"].clone(),
+        "goal_logits": out_before["goal_mask_logits"].clone(),
+        "relation_logits": out_before["relation_logits"].clone(),
     }
 
     # In-phase reload (simulates what P2 would do)
@@ -180,18 +239,31 @@ def phase_switch_parity(vla, p1_model, loader):
 
     out_after = p1_reload(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids)
 
-    z_diff = (ref["z_student"] - out_after["transition_tokens"]).abs().max().item()
+    checks = [
+        ("vlm_hidden",       ref["vlm_hidden"],       vlm_hidden),
+        ("z_student",         ref["z_student"],         out_after["transition_tokens"]),
+        ("current_logits",    ref["current_logits"],    out_after["current_mask_logits"]),
+        ("future_logits",     ref["future_logits"],     out_after["future_mask_logits"]),
+        ("goal_logits",       ref["goal_logits"],       out_after["goal_mask_logits"]),
+        ("relation_logits",   ref["relation_logits"],   out_after["relation_logits"]),
+    ]
 
-    print(f"  z_student max_abs_diff:  {z_diff:.2e} {'✅' if z_diff<1e-5 else '❌'}")
+    all_ok = True
+    for name, before, after in checks:
+        diff = (before.float() - after.float()).abs().max().item()
+        ok = diff < 1e-5
+        print(f"  {name:20s} max_abs_diff: {diff:.2e} {'✅' if ok else '❌'}")
+        if not ok:
+            all_ok = False
 
-    if z_diff >= 1e-5:
-        raise RuntimeError(f"Phase switch parity FAILED: z_diff={z_diff:.2e}")
+    if not all_ok:
+        raise RuntimeError("Phase switch parity FAILED")
 
-    print(f"  ✅ Phase switch parity PASSED")
+    print(f"  ✅ Phase switch parity PASSED (6/6)")
     return p1_reload
 
 
-def phase2_train(args, vla, p1_model, loader, output_dir):
+def phase2_train(args, vla, p1_model, loader, eval_loader, output_dir):
     """Train SpatialActionAdapter + ActionHead with frozen backbone."""
     print(f"\n{'='*60}")
     print("Phase 2: Action Training")
@@ -201,6 +273,11 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
     for p in p1_model.backbone.parameters():
         p.requires_grad_(False)
     p1_model.backbone.eval()
+
+    # ── Check 3a: Hash P1 params before training ────────────
+    p1_hash_before = _param_hash(p1_model.backbone)
+    p1_ref_params = {k: v.detach().cpu().clone() for k, v in p1_model.backbone.named_parameters()}
+    print(f"  P1 param hash (before P2): {p1_hash_before}")
 
     # Trainable: adapter + action
     for p in vla.transition_action_adapter.parameters():
@@ -220,18 +297,17 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
     best_action = float("inf")
     data_iter = iter(loader)
 
-    # Eval step 0 baseline
+    # Eval step 0 baseline (fixed set, fixed seed)
     vla.eval()
+    p1_model.backbone.eval()
+    torch.manual_seed(42); torch.cuda.manual_seed(42)
     eval_al0 = []
-    eval_iter = iter(loader)
     with torch.no_grad():
-        for _ in range(min(args.eval_batches, 50)):
-            try: eb = next(eval_iter)
-            except StopIteration: break
+        for eb in eval_loader:
             eo = vla.forward(eb)
             eval_al0.append(eo.get("action_loss", torch.tensor(0)).item())
     print(f"  📊 Eval step 0: action={np.mean(eval_al0):.4f}")
-    # Re-create data_iter for training (eval consumed batches)
+    # Re-create data_iter for training
     data_iter = iter(loader)
 
     for step in range(args.p2_steps):
@@ -246,6 +322,21 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
         if torch.isnan(loss): opt.zero_grad(); continue
 
         opt.zero_grad(); loss.backward()
+
+        # ── Check 3b: Verify P1 frozen after first backward ──
+        if step == 0:
+            p1_grad_count = sum(1 for p in p1_model.backbone.parameters() if p.grad is not None)
+            act_grad_norm = sum(p.grad.norm().item() for p in vla.action_model.parameters() if p.grad is not None)
+            adapt_grad_norm = sum(p.grad.norm().item() for p in vla.transition_action_adapter.parameters() if p.grad is not None)
+            prop_grad_norm = sum(p.grad.norm().item() for p in vla.proprio_encoder.parameters() if p.grad is not None)
+            gate_g = vla.transition_action_adapter.gate_logit.grad.item() if vla.transition_action_adapter.gate_logit.grad is not None else 0.0
+            print(f"  🔒 P1 frozen check (after 1st backward):")
+            print(f"     P1 parameters with grad: {p1_grad_count} {'✅' if p1_grad_count==0 else '❌ EXPECTED 0'}")
+            print(f"     Action DiT grad norm:     {act_grad_norm:.4f} {'✅' if act_grad_norm>0 else '❌'}")
+            print(f"     Spatial adapter grad norm:{adapt_grad_norm:.4f} {'✅' if adapt_grad_norm>0 else '❌'}")
+            print(f"     Proprio projector grad:   {prop_grad_norm:.4f} {'✅' if prop_grad_norm>0 else '❌'}")
+            print(f"     Gate grad:                {gate_g:.2e} {'✅' if abs(gate_g)>1e-12 else '❌'}")
+
         torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
         opt.step(); sched.step()
 
@@ -258,12 +349,11 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
 
         if (step + 1) % args.eval_interval == 0:
             vla.eval()
+            p1_model.backbone.eval()
+            torch.manual_seed(42); torch.cuda.manual_seed(42)
             eval_al = []
-            eval_iter = iter(loader)
             with torch.no_grad():
-                for _ in range(min(args.eval_batches, 50)):
-                    try: eb = next(eval_iter)
-                    except StopIteration: break
+                for eb in eval_loader:
                     eo = vla.forward(eb)
                     eval_al.append(eo.get("action_loss", torch.tensor(0)).item())
             avg_al = np.mean(eval_al) if eval_al else 0
@@ -273,6 +363,19 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
                 torch.save({"model_state_dict": {k:v.cpu() for k,v in vla.state_dict().items() if any(p in k for p in ['spatial_backbone','transition_action_adapter','proprio_encoder','action_model'])}}, str(output_dir / "best_p2.pt"))
                 print(f"  🏆 Best P2 (action={best_action:.4f})")
             vla.train()
+            p1_model.backbone.eval()
+
+    # ── Check 3c: Verify P1 params unchanged after P2 ──────
+    p1_hash_after = _param_hash(p1_model.backbone)
+    max_d = 0.0
+    for name, p in p1_model.backbone.named_parameters():
+        if name in p1_ref_params:
+            max_d = max(max_d, (p.detach().cpu() - p1_ref_params[name]).abs().max().item())
+    hash_ok = p1_hash_before == p1_hash_after
+    params_ok = max_d < 1e-12
+    print(f"  🔒 P1 freeze verification after P2:")
+    print(f"     Hash unchanged: {hash_ok} {'✅' if hash_ok else '❌'} (before={p1_hash_before} after={p1_hash_after})")
+    print(f"     Max param diff: {max_d:.2e} {'✅' if params_ok else '❌'}")
 
     print(f"\n  P2 Complete. Best action={best_action:.4f}")
 
@@ -285,10 +388,12 @@ def main():
     parser.add_argument("--p2-lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gamma", type=float, default=1.5)
-    parser.add_argument("--w-distill", type=float, default=0.0)
     parser.add_argument("--gate-init", type=float, default=-2.2)
     parser.add_argument("--eval-interval", type=int, default=200)
-    parser.add_argument("--eval-batches", type=int, default=50)
+    parser.add_argument("--eval-samples", type=int, default=200,
+                        help="Number of val-set samples for each eval (subset of val frames)")
+    parser.add_argument("--val-split", type=float, default=0.1,
+                        help="Fraction of demos held out for validation")
     parser.add_argument("--output-dir", type=str, default=str(_REPO / "results/SpatialAction_formal"))
     args = parser.parse_args()
 
@@ -298,7 +403,7 @@ def main():
     print("Unified Spatial Action Training")
     print(f"  P1: {args.p1_steps} steps, lr={args.p1_lr}")
     print(f"  P2: {args.p2_steps} steps, lr={args.p2_lr}")
-    print(f"  gamma={args.gamma}  w_distill={args.w_distill}  gate_init={args.gate_init}")
+    print(f"  gamma={args.gamma}  gate_init={args.gate_init}  val_split={args.val_split}")
     print("=" * 60)
 
     # Build
@@ -316,15 +421,57 @@ def main():
         "num_workers": 2, "state_dim": 7,
     }}}), dataset_py="spatial_cot_libero")
 
+    # ── Check 4: Demo-level train/val split ────────────────
+    # Same (suite, task_id, demo_id) must not appear in both train and val.
+    full_ds = loader.dataset
+    entries = full_ds._ds.entries
+
+    from collections import defaultdict
+    demo_to_indices = defaultdict(list)
+    for i, entry in enumerate(entries):
+        dk = (entry.get("suite", ""), entry.get("task_id", -1), entry.get("demo_id", -1))
+        demo_to_indices[dk].append(i)
+
+    demo_keys = sorted(demo_to_indices.keys())
+    n_val_demos = max(1, int(len(demo_keys) * args.val_split))
+    rng = np.random.RandomState(42)
+    rng.shuffle(demo_keys)
+    val_demo_set = set(demo_keys[:n_val_demos])
+
+    train_indices, val_indices = [], []
+    for dk in demo_keys:
+        if dk in val_demo_set:
+            val_indices.extend(demo_to_indices[dk])
+        else:
+            train_indices.extend(demo_to_indices[dk])
+
+    train_subset = Subset(full_ds, sorted(train_indices))
+    val_subset = Subset(full_ds, sorted(val_indices))
+
+    # Re-create training loader on train subset only
+    train_loader = DataLoader(train_subset, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=lambda batch: batch, num_workers=2, pin_memory=True)
+
+    # Fixed eval loader on val subset (shuffle=False, fixed seed)
+    n_eval = min(args.eval_samples, len(val_subset))
+    eval_indices = sorted(rng.choice(len(val_subset), size=n_eval, replace=False).tolist())
+    eval_subset = Subset(val_subset, eval_indices)
+    eval_loader = DataLoader(eval_subset, batch_size=args.batch_size, shuffle=False,
+                             collate_fn=lambda batch: batch, num_workers=0, pin_memory=True)
+
+    print(f"  Demo split: {len(demo_keys)} demos → {len(demo_keys)-n_val_demos} train + {n_val_demos} val")
+    print(f"  Frame split: {len(train_subset)} train + {len(val_subset)} val frames")
+    print(f"  Fixed eval set: {n_eval} val samples ({len(eval_loader)} batches)")
+
     # Phase 1
-    best_p1, p1_model = phase1_train(args, vla, loader, output_dir)
+    best_p1, p1_model = phase1_train(args, vla, train_loader, eval_loader, output_dir)
     torch.save({"p1_state_dict": best_p1}, str(output_dir / "best_p1.pt"))
 
-    # Phase switch parity
-    p1_model = phase_switch_parity(vla, p1_model, loader)
+    # Phase switch parity (uses one training batch)
+    p1_model = phase_switch_parity(vla, p1_model, train_loader)
 
     # Phase 2
-    phase2_train(args, vla, p1_model, loader, output_dir)
+    phase2_train(args, vla, p1_model, train_loader, eval_loader, output_dir)
 
     print(f"\n{'='*60}\nTraining Complete\n{'='*60}")
 

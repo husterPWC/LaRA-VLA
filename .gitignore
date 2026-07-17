@@ -185,6 +185,8 @@ playground/Datasets
 eval/SimplerEnv
 
 results
+output/
+datasets/
 nohup.out
 *.out
 length_distribution.png
