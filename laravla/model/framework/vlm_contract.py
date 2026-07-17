@@ -50,7 +50,7 @@ def build_vlm_contract(vla) -> dict:
             raise ValueError(f"Special token '{token_name}' not found in tokenizer")
         special_tokens[token_name] = {
             "token_id": int(token_id),
-            "embedding": embed_weight[token_id].cpu().clone(),
+            "embedding": embed_weight[token_id].cpu().float().clone(),
         }
 
     contract = {
@@ -137,5 +137,5 @@ def _hash_embeddings(special_tokens: dict, embed_weight=None) -> str:
         if embed_weight is not None:
             # Use current weight to verify after restore
             emb = embed_weight[info["token_id"]]
-        h.update(emb.cpu().numpy().tobytes())
+        h.update(emb.cpu().float().numpy().tobytes())
     return h.hexdigest()[:16]
