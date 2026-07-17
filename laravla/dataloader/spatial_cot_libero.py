@@ -156,14 +156,20 @@ class SpatialCoTLiberoAdapter(Dataset):
         sample["tau_future_valid"] = bool(tau_valid)
         sample["future_tau_mask_agentview"] = tau_mask
 
-        # Raw uint8 arrays for DINO target (bypass PIL round-trip)
-        # These eliminate any PIL conversion differences between train/eval/reload
-        # Raw uint8 for DINO target: (float_0_1 * 255) → uint8, matches PIL→np conversion
+        # Raw uint8 from NPZ (no PIL round-trip, exact original values)
         sample["image_current_raw"] = (s["image"].transpose(1, 2, 0) * 255).astype(np.uint8)
-        if image_tau is not None and len(image_tau) > 0:
-            sample["image_tau_future_raw"] = np.array(image_tau[0], dtype=np.uint8)
-        else:
-            sample["image_tau_future_raw"] = sample["image_current_raw"]
+        # Tau future: directly from NPZ frame, not via PIL
+        tau_raw = (s["image_next"].transpose(1,2,0) * 255).astype(np.uint8)
+        if tau_idx is not None and tau_idx != orig_future_idx:
+            ep_path = entry.get("episode_path", "")
+            if ep_path:
+                try:
+                    data = self._ds._load_episode(ep_path)
+                    tc = min(int(tau_idx), data["rgb_agentview"].shape[0] - 1)
+                    tau_raw = data["rgb_agentview"][tc].copy()  # [224,224,3] uint8
+                except Exception:
+                    pass
+        sample["image_tau_future_raw"] = tau_raw
 
         return sample
 

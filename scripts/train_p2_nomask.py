@@ -106,10 +106,21 @@ def main():
     vla = build_framework(OmegaConf.create(model_cfg))
     vla.load_state_dict(torch.load(CKPT, map_location="cpu"), strict=False)
 
-    # Inject P1 backbone (strict, unified format)
-    p1_state = torch.load(args.p1_ckpt, map_location="cpu")
-    if "p1_state_dict" in p1_state:
-        p1_state = p1_state["p1_state_dict"]
+    # Inject P1 backbone + restore VLM token embeddings
+    raw_ckpt = torch.load(args.p1_ckpt, map_location="cpu")
+    p1_state = raw_ckpt.get("p1_state_dict", raw_ckpt)
+
+    # Restore VLM token embeddings (fixes cross-process hidden mismatch)
+    if "vlm_token_embeddings" in raw_ckpt:
+        vlm_embeds = raw_ckpt["vlm_token_embeddings"]
+        current_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
+        if vlm_embeds.shape == current_embeds.shape:
+            current_embeds.copy_(vlm_embeds)
+            if accelerator.is_main_process:
+                print(f"  VLM token embeddings restored ({vlm_embeds.shape[0]} tokens)")
+        else:
+            if accelerator.is_main_process:
+                print(f"  WARNING: VLM embedding shape mismatch: saved={vlm_embeds.shape} current={current_embeds.shape}")
 
     # Backbone keys in P1 checkpoint are "backbone.*" — load directly
     backbone_state = {k.replace("backbone.", ""): v

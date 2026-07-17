@@ -393,16 +393,25 @@ def main():
                 if student_score > best_eval:
                     best_eval = student_score
                     unwrapped = accelerator.unwrap_model(p1_model)
-                    torch.save({"p1_state_dict": unwrapped.state_dict()}, str(output_dir / "best_model.pt"))
-                    torch.save({"p1_state_dict": unwrapped.state_dict()},
-                               str(output_dir / "best_student.pt"))
+                    # Save VLM token embeddings to fix cross-process VLM hidden mismatch
+                    vlm_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
+                    ckpt_data = {
+                        "p1_state_dict": unwrapped.state_dict(),
+                        "vlm_token_embeddings": vlm_embeds.cpu().clone(),
+                    }
+                    torch.save(ckpt_data, str(output_dir / "best_model.pt"))
+                    torch.save(ckpt_data, str(output_dir / "best_student.pt"))
                     print(f"  🏆 Best student (score={student_score:.4f})")
 
     # ── Final ───────────────────────────────────────────────
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unwrapped = accelerator.unwrap_model(p1_model)
-        torch.save({"p1_state_dict": unwrapped.state_dict()}, str(output_dir / "final_model.pt"))
+        vlm_embeds = vla.qwen_vl_interface.model.get_input_embeddings().weight.data
+        torch.save({
+            "p1_state_dict": unwrapped.state_dict(),
+            "vlm_token_embeddings": vlm_embeds.cpu().clone(),
+        }, str(output_dir / "final_model.pt"))
         print(f"\n{'='*60}\nP1-New Complete\n  Best val: {best_eval:.4f}\n"
               f"  Time: {(time.time()-t0)/60:.0f}min\n{'='*60}")
 
