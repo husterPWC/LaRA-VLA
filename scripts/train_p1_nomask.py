@@ -280,7 +280,9 @@ def main():
         if accelerator.is_main_process and (step + 1) % args.save_interval == 0:
             unwrapped = accelerator.unwrap_model(p1_model)
             ckpt_path = output_dir / f"checkpoint_step{step+1}.pt"
-            torch.save({"step": step + 1, "p1_state_dict": unwrapped.state_dict()}, str(ckpt_path))
+            from laravla.model.framework.vlm_contract import build_vlm_contract
+            torch.save({"step": step + 1, "p1_state_dict": unwrapped.state_dict(),
+                        "vlm_contract": build_vlm_contract(vla)}, str(ckpt_path))
             print(f"  ✅ Checkpoint: {ckpt_path}")
 
         # Eval
@@ -346,7 +348,8 @@ def main():
                     eval_ra.append(eo["relation_acc"].item())
                     if dino_eval_target is not None:
                         eval_dl.append(eo.get("dino_future_loss", torch.tensor(0)).item())
-                        eval_dc.append(eo.get("dino_future_cos", torch.tensor(0)).item())
+                        dc_val = eo.get("dino_future_cos")
+                        eval_dc.append(dc_val.item() if dc_val is not None else 0.0)
                     eval_lpc.append(eo.get("latent_pair_cos", torch.tensor(0)).item())
                     # Teacher eval
                     eval_tcd.append(eo.get("teacher_C_dice", torch.tensor(0)).item())

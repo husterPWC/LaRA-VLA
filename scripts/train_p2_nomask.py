@@ -115,7 +115,7 @@ def main():
         from laravla.model.framework.vlm_contract import restore_vlm_contract
         ok = restore_vlm_contract(vla, raw_ckpt["vlm_contract"])
         if ok and accelerator.is_main_process:
-            print(f"  VLM contract restored: 4 special tokens, hash verified")
+            print(f"  VLM contract restored: full embedding matrix, hash verified")
     elif "vlm_token_embeddings" in raw_ckpt:
         # Legacy fallback
         vlm_embeds = raw_ckpt["vlm_token_embeddings"]

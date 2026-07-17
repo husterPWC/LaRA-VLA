@@ -140,8 +140,7 @@ class P1NoMaskWrapper(nn.Module):
             if L_dino is not None:
                 total = total + w.get("dino_future", 0.05) * L_dino
                 result["dino_future_loss"] = L_dino
-                result["dino_future_cos"] = dino_result.get("cosine",
-                    torch.tensor(0.0) if dino_result["cosine"] is None else dino_result["cosine"])
+                result["dino_future_cos"] = dino_result["cosine"] if dino_result["cosine"] is not None else torch.tensor(0.0)
 
         # ── Teacher branch (Step 5, training-only) ───────────
         if self.posterior_encoder is not None and dino_future_target is not None and dino_cur is not None:
@@ -176,10 +175,14 @@ class P1NoMaskWrapper(nn.Module):
             if self._distill_step.item() < warmup_steps:
                 distill_w = distill_w * self._distill_step.item() / max(warmup_steps, 1)
             total = total + distill_w * distill_raw
+            t_rel_pred = t_out.relation_logits.argmax(dim=1)
+            t_rel_valid = (rel_ids >= 0) & (rel_ids < t_out.relation_logits.shape[1])
+            t_rel_acc = (t_rel_pred[t_rel_valid] == rel_ids[t_rel_valid]).float().mean() if t_rel_valid.any() else torch.tensor(0.0)
             result.update({
                 "teacher_C_dice": self._dice(t_out.current_mask_logits, cur_gt).detach(),
                 "teacher_F_dice": self._dice(t_out.future_mask_logits, future_gt).detach(),
                 "teacher_G_dice": self._dice(t_out.goal_mask_logits, goal_gt).detach(),
+                "teacher_RelAcc": t_rel_acc.detach(),
                 "teacher_total_loss": t_losses["total_loss"].detach(),
                 "teacher_dino_cos": t_dino.get("cosine", torch.tensor(0.0)).detach() if t_dino["cosine"] is not None else torch.tensor(0.0),
                 "teacher_pair_cos": torch.tensor(0.0),
