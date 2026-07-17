@@ -636,18 +636,11 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_current=w.get("current_mask",0.05), w_future=w.get("future_mask",0.05),
                 w_goal=w.get("goal_mask",0.10), w_relation=w.get("relation",0.05))
 
-            # ── DINO future loss ─────────────────────────────
-            future_images_list = [ex.get("image_tau_future", ex.get("image_next", None)) for ex in examples]
+            # ── DINO future loss (raw uint8, matches P1 training) ─
             dino_loss_val = torch.tensor(0.0, device=vlm_hidden.device)
             dino_cos_val = torch.tensor(0.0, device=vlm_hidden.device)
             if self.dino_encoder is not None and spatial_out.pred_future_dino is not None:
-                future_tensors = []
-                for i, fi in enumerate(future_images_list):
-                    if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
-                    if fi is not None:
-                        future_tensors.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
-                    else:
-                        future_tensors.append(torch.from_numpy(np.array(examples[i]["image"][0], dtype=np.uint8)).permute(2,0,1))
+                future_tensors = [torch.from_numpy(ex["image_tau_future_raw"]).permute(2,0,1) for ex in examples]
                 future_rgb = torch.stack(future_tensors).to(vlm_hidden.device)
                 with torch.no_grad():
                     dino_target = self.dino_encoder(future_rgb)

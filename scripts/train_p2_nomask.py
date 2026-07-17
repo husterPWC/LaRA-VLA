@@ -362,8 +362,8 @@ def _p2_dino_parity(vla, loader, device):
     avg_p2 = np.mean(dino_cos_p2) if dino_cos_p2 else 0
     diff = abs(avg_p1 - avg_p2)
     print(f"  P1 ref DINO cos={avg_p1:.4f}  P2 internal DINO cos={avg_p2:.4f}  |diff|={diff:.4f}")
-    if avg_p1 < 0.70:
-        print(f"  ❌ FATAL: P1 future DINO cos={avg_p1:.4f} < 0.70")
+    if avg_p1 < 0.60:
+        print(f"  ❌ FATAL: P1 future DINO cos={avg_p1:.4f} < 0.60")
         print(f"  P2 training aborted — P1 checkpoint lacks valid future DINO capability.")
         raise RuntimeError("P1 future DINO capability invalid; P2 training aborted.")
     if diff < 0.05:

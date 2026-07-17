@@ -79,9 +79,11 @@ class DINOSpatialProjector(nn.Module):
         Returns:
             [B, num_queries, transition_dim] spatial tokens
         """
-        B = pred_future_dino.shape[0]
-        # Project patches + add position embedding
-        x = self.patch_proj(pred_future_dino) + self.pos_embed[:, :x.shape[1] if hasattr(self, '_cached') else 256, :]
+        # Normalize to unit norm — dino_future_head output scale varies,
+        # but spatial projector should work with direction, not magnitude.
+        x = torch.nn.functional.normalize(pred_future_dino.float(), dim=-1)
+        B = x.shape[0]
+        x = self.patch_proj(x) + self.pos_embed[:, :x.shape[1], :]
         # Resample: 16 queries cross-attend to 256 patches
         q = self.queries.expand(B, -1, -1)
         out, _ = self.cross_attn(query=q, key=x, value=x)
