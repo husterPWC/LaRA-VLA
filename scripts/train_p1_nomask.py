@@ -201,35 +201,19 @@ def main():
             )
             vlm_hidden = qwen_out.hidden_states[-1]
 
-        # DINO features: current RGB + tau future RGB (teacher uses both)
+        # DINO features: use raw uint8 arrays (bypass PIL round-trip)
         dino_future_target = None
         dino_cur = None
         if vla.dino_encoder is not None:
-            # Current DINO (for teacher posterior)
-            cur_tensors = []
-            for s in batch:
-                arr = np.array(s["image"][0], dtype=np.uint8)
-                cur_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+            cur_tensors = [torch.from_numpy(s["image_current_raw"]).permute(2,0,1) for s in batch]
             cur_rgb = torch.stack(cur_tensors).to(accelerator.device)
             with torch.no_grad():
                 dino_cur = vla.dino_encoder(cur_rgb)
 
-            # Future DINO (for DINO loss target + teacher)
-            future_imgs = [s.get(dino_image_key, None) for s in batch]
-            if any(fi is not None for fi in future_imgs):
-                future_tensors = []
-                for i, fi in enumerate(future_imgs):
-                    if fi is not None and isinstance(fi, list) and len(fi) > 0:
-                        fi = fi[0]
-                    if fi is not None:
-                        arr = np.array(fi, dtype=np.uint8)
-                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                    else:
-                        arr = np.array(batch[i]["image"][0], dtype=np.uint8)
-                        future_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                future_rgb = torch.stack(future_tensors).to(accelerator.device)
-                with torch.no_grad():
-                    dino_future_target = vla.dino_encoder(future_rgb)
+            fut_tensors = [torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in batch]
+            future_rgb = torch.stack(fut_tensors).to(accelerator.device)
+            with torch.no_grad():
+                dino_future_target = vla.dino_encoder(future_rgb)
 
         # P1 forward: student + teacher + distill
         out = p1_model(vlm_hidden, cur_masks, future_masks, goal_masks, rel_ids,
@@ -340,36 +324,16 @@ def main():
                             [s.get("tau_future_valid", True) for s in eb],
                             dtype=torch.bool, device=accelerator.device)
 
-                    # DINO features for eval
+                    # DINO features for eval (raw uint8, no PIL round-trip)
                     dino_eval_target = None
                     dino_eval_cur = None
                     if vla.dino_encoder is not None:
-                        # Current DINO
-                        ceval_tensors = []
-                        for s in eb:
-                            arr = np.array(s["image"][0], dtype=np.uint8)
-                            ceval_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
+                        ceval_tensors = [torch.from_numpy(s["image_current_raw"]).permute(2,0,1) for s in eb]
                         with torch.no_grad():
-                            dino_eval_cur = vla.dino_encoder(
-                                torch.stack(ceval_tensors).to(accelerator.device))
-
-                        # Future DINO
-                        feval_imgs = [s.get(dino_image_key, None) for s in eb]
-                        if any(fi is not None for fi in feval_imgs):
-                            feval_tensors = []
-                            for fi in feval_imgs:
-                                if fi is not None and isinstance(fi, list) and len(fi) > 0:
-                                    fi = fi[0]
-                                if fi is not None:
-                                    arr = np.array(fi, dtype=np.uint8)
-                                    feval_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                                else:
-                                    s2 = eb[len(feval_tensors)]
-                                    arr = np.array(s2["image"][0], dtype=np.uint8)
-                                    feval_tensors.append(torch.from_numpy(arr).permute(2, 0, 1))
-                            future_rgb_eval = torch.stack(feval_tensors).to(accelerator.device)
-                            with torch.no_grad():
-                                dino_eval_target = vla.dino_encoder(future_rgb_eval)
+                            dino_eval_cur = vla.dino_encoder(torch.stack(ceval_tensors).to(accelerator.device))
+                        feval_tensors = [torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in eb]
+                        with torch.no_grad():
+                            dino_eval_target = vla.dino_encoder(torch.stack(feval_tensors).to(accelerator.device))
 
                     eo = p1_model(vh, cm, fm, gm, ri,
                                   dino_future_target=dino_eval_target,
@@ -533,12 +497,7 @@ def _verify_dino_roundtrip(output_dir, vla, loader, use_tau_future, device):
         with torch.no_grad():
             eqo = vla.qwen_vl_interface.encode_observation(images=eimages, instructions=einst, output_hidden_states=True)
             evh = eqo.hidden_states[-1]
-        efimgs = [s.get(dino_key, s.get("image_next", None)) for s in eb]
-        eft = []
-        for i, fi in enumerate(efimgs):
-            if fi is not None and isinstance(fi, list) and len(fi) > 0: fi = fi[0]
-            if fi is not None: eft.append(torch.from_numpy(np.array(fi, dtype=np.uint8)).permute(2,0,1))
-            else: eft.append(torch.from_numpy(np.array(eimages[i][0], dtype=np.uint8)).permute(2,0,1))
+        eft = [torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in eb]
         with torch.no_grad():
             edt = vla.dino_encoder(torch.stack(eft).to(device))
             eeo = p1_reload(evh, ecm, efm, egm, eri, dino_future_target=edt)
