@@ -8,19 +8,14 @@ Architecture:
     vlm_hidden → vlm_projector → [B,L,512]
     → transition_module (no mask tokens) → z_raw [B,6,512]
     → z_raw + gamma * LN(slot_queries) → z_student [B,6,512]
-    → typed routing → shared mask_decoder / relation_head / dino_future_head
+    → typed routing → shared mask_decoder / relation_head
 
 The backbone owns:
     vlm_projector, transition_module, slot queries, shared mask_decoder,
-    relation_head, dino_future_head
-
-Checkpoint format:
-    {"spatial_backbone_state_dict": backbone.state_dict()}
-    Load with strict=True → missing=0, unexpected=0.
+    relation_head
 """
 
 from dataclasses import dataclass
-from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,15 +36,13 @@ class SpatialTransitionOutput:
     goal_mask_logits: torch.Tensor       # [B, 1, R, R]
     relation_logits: torch.Tensor        # [B, num_classes]
 
-    pred_future_dino: Optional[torch.Tensor] = None  # [B, K, dino_dim] or None
-
 
 class SpatialTransitionBackbone(nn.Module):
     """
     Shared spatial reasoning backbone for P1 and P2.
 
-    P1 uses this for mask/relation/DINO supervision.
-    P2 uses this for z_student + pred_future_dino → action.
+    P1 uses this for mask/relation supervision.
+    P2 uses z_student → spatial action adapter → action.
 
     Args:
         vlm_dim: VLM hidden dimension (2560 for Qwen3-VL-4B)
@@ -58,8 +51,6 @@ class SpatialTransitionBackbone(nn.Module):
         num_relation_labels: relation classification classes (default 7)
         gamma: slot identity residual strength (default 1.5)
         mask_res: mask decoder output resolution (default 56)
-        dino_dim: DINO feature dimension (768 for ViT-B/14)
-        dino_num_patches: DINO patch count (256 for 224x224/patch14)
     """
 
     def __init__(
@@ -70,8 +61,6 @@ class SpatialTransitionBackbone(nn.Module):
         num_relation_labels: int = 7,
         gamma: float = 1.5,
         mask_res: int = 56,
-        dino_dim: int = 768,
-        dino_num_patches: int = 256,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -107,15 +96,6 @@ class SpatialTransitionBackbone(nn.Module):
         # ── Relation head ─────────────────────────────────────
         self.relation_head = RelationHead(
             transition_dim=hidden_dim, num_classes=num_relation_labels
-        )
-
-        # ── DINO future head ──────────────────────────────────
-        from laravla.model.modules.spatial_transition.dino_future_head import (
-            DINOFutureHead
-        )
-        self.dino_future_head = DINOFutureHead(
-            transition_dim=hidden_dim, dino_dim=dino_dim,
-            num_patches=dino_num_patches,
         )
 
     # ── Public API ────────────────────────────────────────────
@@ -161,8 +141,6 @@ class SpatialTransitionBackbone(nn.Module):
         # Relation head uses single token → squeeze
         rel_logits = self.relation_head(relation_tokens)
 
-        pred_future_dino = self.dino_future_head(future_tokens)
-
         return SpatialTransitionOutput(
             z_student=z_student,
             current_tokens=current_tokens,
@@ -173,7 +151,6 @@ class SpatialTransitionBackbone(nn.Module):
             future_mask_logits=future_logits,
             goal_mask_logits=goal_logits,
             relation_logits=rel_logits,
-            pred_future_dino=pred_future_dino,
         )
 
     def forward(self, vlm_hidden: torch.Tensor) -> SpatialTransitionOutput:
@@ -187,7 +164,6 @@ def build_spatial_backbone(
     hidden_dim: int = 512,
     num_slots: int = 6,
     gamma: float = 1.5,
-    **kwargs,
 ) -> SpatialTransitionBackbone:
     """Factory: build the formal SpatialTransitionBackbone."""
     return SpatialTransitionBackbone(
@@ -195,5 +171,4 @@ def build_spatial_backbone(
         hidden_dim=hidden_dim,
         num_slots=num_slots,
         gamma=gamma,
-        **kwargs,
     )

@@ -75,14 +75,11 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         if self.transition_enabled:
             vlm_dim = self.qwen_vl_interface.model.config.hidden_size
             self.transition_dim = trans_cfg.get("transition_dim", 512)
-            dino_cfg = trans_cfg.get("dino", {})
-            dino_dim = dino_cfg.get("dino_dim", 768)
 
             # ── Unified spatial backbone (P1 and P2 share this) ──
             from laravla.model.modules.spatial_transition import (
                 SpatialTransitionBackbone, GatedTransitionActionAdapter,
-                ProprioEncoder, DINOSpatialProjector, PosteriorTransitionEncoder,
-                SpatialDINOEncoder,
+                ProprioEncoder,
             )
             gamma = trans_cfg.get("loss_weights", {}).get("slot_residual_gamma", 1.5)
             self.spatial_backbone = SpatialTransitionBackbone(
@@ -91,49 +88,22 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 gamma=gamma,
             )
 
-            # ── Frozen DINO encoder ──────────────────────────
-            self.dino_encoder = SpatialDINOEncoder(
-                model_name=dino_cfg.get("model_name", "dinov2_vitb14"), freeze=True
-            )
-
-            # ── Action spatial adapter ───────────────────────
+            # ── Action spatial adapter (7 tokens: 6 typed + 1 proprio) ─
             self.proprio_encoder = ProprioEncoder(
                 state_dim=7, transition_dim=self.transition_dim)
-            self.dino_spatial_projector = DINOSpatialProjector(
-                dino_dim=dino_dim, transition_dim=self.transition_dim)
-            dino_queries = 16  # 16 spatial queries from DINO projector
-            adapter_num_tokens = trans_cfg.get("num_transition_tokens", 6) + dino_queries + 1
             self.transition_action_adapter = GatedTransitionActionAdapter(
                 transition_dim=self.transition_dim,
-                num_transition_tokens=adapter_num_tokens, vlm_dim=vlm_dim)
-
-            # ── Posterior teacher (Step 5) ────────────────────
-            self.posterior_encoder = PosteriorTransitionEncoder(
-                dino_dim=dino_dim, transition_dim=self.transition_dim)
-
-            # Legacy (unused, kept for compat)
-            self.mask_token_encoder = None
-            self.vlm_projector = None
-            self.transition_module = None
-            self.future_mask_decoder = None
-            self.goal_mask_decoder = None
-            self.current_mask_decoder = None
-            self.relation_head = None
-            self.dino_future_head = None
-            self.transition_to_action = None
+                num_transition_tokens=trans_cfg.get("num_transition_tokens",6)+1,
+                vlm_dim=vlm_dim)
 
             self.transition_loss_weights = trans_cfg.get("loss_weights", {
                 "future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
-                "current_mask": 0.05, "dino_future": 0.05,
+                "current_mask": 0.05,
             })
         else:
             self.spatial_backbone = None
-            self.mask_token_encoder = None
             self.transition_action_adapter = None
-            self.dino_encoder = None
-            self.posterior_encoder = None
             self.proprio_encoder = None
-            self.dino_spatial_projector = None
             self.transition_loss_weights = {}
 
         # Training stage control
@@ -636,25 +606,8 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                 w_current=w.get("current_mask",0.05), w_future=w.get("future_mask",0.05),
                 w_goal=w.get("goal_mask",0.10), w_relation=w.get("relation",0.05))
 
-            # ── DINO future loss (raw uint8, matches P1 training) ─
-            dino_loss_val = torch.tensor(0.0, device=vlm_hidden.device)
-            dino_cos_val = torch.tensor(0.0, device=vlm_hidden.device)
-            if self.dino_encoder is not None and spatial_out.pred_future_dino is not None:
-                future_tensors = [torch.from_numpy(ex["image_tau_future_raw"]).permute(2,0,1) for ex in examples]
-                future_rgb = torch.stack(future_tensors).to(vlm_hidden.device)
-                with torch.no_grad():
-                    dino_target = self.dino_encoder(future_rgb)
-                from laravla.model.modules.spatial_transition import dino_future_cosine
-                dino_result = dino_future_cosine(spatial_out.pred_future_dino, dino_target)
-                if dino_result["loss"] is not None:
-                    dino_loss_val = dino_result["loss"]
-                if dino_result["cosine"] is not None:
-                    dino_cos_val = dino_result["cosine"]
-
-            # ── Spatial action stream ─────────────────────────
+            # ── Spatial action stream (6 typed + 1 proprio = 7 tokens) ─
             ext_tokens = [spatial_out.z_student]
-            if spatial_out.pred_future_dino is not None and self.dino_spatial_projector is not None:
-                ext_tokens.append(self.dino_spatial_projector(spatial_out.pred_future_dino))
             if state is not None and self.proprio_encoder is not None:
                 st = torch.tensor(np.array(state), device=vlm_hidden.device, dtype=vlm_hidden.dtype)
                 if st.ndim == 2: st = st.unsqueeze(1)
@@ -676,11 +629,10 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
                     state_rep = st2.repeat(rds, 1, 1)
                 action_loss = self.action_model(conditioned_rep, actions_target_rep, state_rep)
 
-            # P2 formal: aux losses are monitoring only, not in optimization target
+            # P2 formal: aux losses are monitoring only
             total = action_loss
             result = {
                 "action_loss": action_loss,
-                "dino_future_loss": dino_loss_val.detach(),
                 "dino_future_cos": dino_cos_val.detach(),
                 "current_mask_loss": trans_losses.get("current_mask_loss", torch.tensor(0.0)),
                 "future_mask_loss": trans_losses.get("future_mask_loss", torch.tensor(0.0)),
@@ -971,13 +923,11 @@ class Qwen_GR00T(LatentAnalysisMixin, baseframework):
         if state_t is not None and state_t.ndim == 2:
             state_t = state_t.unsqueeze(1)  # [B, D] → [B, 1, D]
 
-        # ── Spatial stream conditioning (unified backbone) ─────
+        # ── Spatial stream conditioning (6 typed + proprio) ────
         if self.transition_enabled and self.spatial_backbone is not None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 spatial_out = self.spatial_backbone(last_hidden.float())
                 ext_tokens = [spatial_out.z_student]
-                if spatial_out.pred_future_dino is not None and self.dino_spatial_projector is not None:
-                    ext_tokens.append(self.dino_spatial_projector(spatial_out.pred_future_dino))
                 if state_t is not None and self.proprio_encoder is not None:
                     ext_tokens.append(self.proprio_encoder(state_t))
                 ext = torch.cat(ext_tokens, dim=1)

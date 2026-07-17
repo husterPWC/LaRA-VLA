@@ -2,7 +2,7 @@
 """
 Unified Spatial Action Training — single process, two phases.
 ===============================================================
-Phase 1: train SpatialTransitionBackbone (mask/relation/DINO)
+Phase 1: train SpatialTransitionBackbone (mask/relation)
 Phase 2: freeze backbone, train SpatialActionAdapter + ActionHead
 
 No cross-process checkpoint loading — phase switch is in-place.
@@ -41,12 +41,8 @@ def build_model(args):
         "enable": True, "num_transition_tokens": 6,
         "mask_res": 56, "num_relation_labels": 7, "transition_dim": 512,
         "loss_weights": {"future_mask": 0.05, "goal_mask": 0.10, "relation": 0.05,
-                         "current_mask": 0.05, "dino_future": 0.05,
-                         "slot_residual_gamma": args.gamma,
-                         "distill_weight": args.w_distill,
-                         "distill_warmup_steps": 100,
-                         "teacher_loss_weight": 0.5},
-        "dino": {"model_name": "dinov2_vitb14", "dino_dim": 768, "num_patches": 256},
+                         "current_mask": 0.05,
+                         "slot_residual_gamma": args.gamma},
     }
     from laravla.model.framework import build_framework
     vla = build_framework(OmegaConf.create(model_cfg))
@@ -70,11 +66,9 @@ def phase1_train(args, vla, loader, output_dir):
     ).to("cuda")
     for p in p1_model.parameters():
         p.requires_grad_(True)
-    # Freeze VLM + DINO
+    # Freeze VLM
     vla.qwen_vl_interface.eval()
     for p in vla.qwen_vl_interface.parameters():
-        p.requires_grad_(False)
-    for p in vla.dino_encoder.parameters():
         p.requires_grad_(False)
 
     opt = torch.optim.AdamW(p1_model.parameters(), lr=args.p1_lr, weight_decay=1e-5)
@@ -99,12 +93,9 @@ def phase1_train(args, vla, loader, output_dir):
         with torch.no_grad():
             qo = vla.qwen_vl_interface.encode_observation(images=images, instructions=instructions, output_hidden_states=True)
             vlm_hidden = qo.hidden_states[-1]
-            dino_cur = vla.dino_encoder(torch.stack([torch.from_numpy(s["image_current_raw"]).permute(2,0,1) for s in batch]).to("cuda"))
-            dino_fut = vla.dino_encoder(torch.stack([torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in batch]).to("cuda"))
 
         p1_model.train()
-        out = p1_model(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids,
-                       dino_future_target=dino_fut, dino_cur=dino_cur)
+        out = p1_model(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids)
         loss = out["total_loss"]
         if torch.isnan(loss): opt.zero_grad(); continue
 
@@ -113,13 +104,14 @@ def phase1_train(args, vla, loader, output_dir):
         opt.step(); sched.step()
 
         if step % 100 == 0 or step == args.p1_steps - 1:
-            dc = out.get("dino_future_cos", torch.tensor(0)).item()
-            print(f"  P1 {step:4d}: loss={loss.item():.4f}  Dc={dc:.3f}  lr={sched.get_last_lr()[0]:.2e}")
+            cd = out.get("current_dice", torch.tensor(0)).item()
+            fd = out.get("future_dice", torch.tensor(0)).item()
+            print(f"  P1 {step:4d}: loss={loss.item():.4f}  C={cd:.2f} F={fd:.2f}  lr={sched.get_last_lr()[0]:.2e}")
 
         # Eval + save best
         if (step + 1) % args.eval_interval == 0:
             p1_model.eval()
-            eval_dc, eval_cd, eval_fd, eval_gd, eval_ra = [], [], [], [], []
+            eval_cd, eval_fd, eval_gd, eval_ra = [], [], [], []
             eval_iter = iter(loader)
             with torch.no_grad():
                 for _ in range(min(args.eval_batches, 50)):
@@ -131,17 +123,13 @@ def phase1_train(args, vla, loader, output_dir):
                     eri = torch.tensor([s["relation_label_id"] for s in eb], dtype=torch.long, device="cuda")
                     qo = vla.qwen_vl_interface.encode_observation(images=[s["image"] for s in eb], instructions=[s["lang"] for s in eb], output_hidden_states=True)
                     evh = qo.hidden_states[-1]
-                    edt = vla.dino_encoder(torch.stack([torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in eb]).to("cuda"))
-                    eo = p1_model(evh, ecm, efm, egm, eri, dino_future_target=edt)
-                    dc_v = eo.get("dino_future_cos")
-                    eval_dc.append(dc_v.item() if dc_v is not None else 0.0)
+                    eo = p1_model(evh, ecm, efm, egm, eri)
                     eval_cd.append(eo["current_dice"].item())
                     eval_fd.append(eo["future_dice"].item())
                     eval_gd.append(eo["goal_dice"].item())
                     eval_ra.append(eo["relation_acc"].item())
-            avg_dc = np.mean(eval_dc) if eval_dc else 0
-            avg_score = (np.mean(eval_cd)+np.mean(eval_fd)+np.mean(eval_gd))/3 + 0.2*np.mean(eval_ra) + 0.2*avg_dc
-            print(f"  📊 Eval {step+1}: Dc={avg_dc:.2f} C={np.mean(eval_cd):.3f} score={avg_score:.3f}")
+            avg_score = (np.mean(eval_cd)+np.mean(eval_fd)+np.mean(eval_gd))/3 + 0.2*np.mean(eval_ra)
+            print(f"  📊 Eval {step+1}: C={np.mean(eval_cd):.3f} F={np.mean(eval_fd):.3f} G={np.mean(eval_gd):.3f} score={avg_score:.3f}")
             if avg_score > best_score:
                 best_score = avg_score
                 best_state = {k: v.cpu().clone() for k, v in p1_model.state_dict().items()}
@@ -169,11 +157,10 @@ def phase_switch_parity(vla, p1_model, loader):
     with torch.no_grad():
         qo = vla.qwen_vl_interface.encode_observation(images=images, instructions=instructions, output_hidden_states=True)
         vlm_hidden = qo.hidden_states[-1]
-        dino_fut = vla.dino_encoder(torch.stack([torch.from_numpy(s["image_tau_future_raw"]).permute(2,0,1) for s in batch]).to("cuda"))
 
     # Before switch
     p1_model.eval()
-    out_before = p1_model(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids, dino_future_target=dino_fut)
+    out_before = p1_model(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids)
 
     # Save reference tensors
     ref = {
@@ -181,7 +168,6 @@ def phase_switch_parity(vla, p1_model, loader):
         "current_dice": out_before["current_dice"].clone(),
         "future_dice": out_before["future_dice"].clone(),
         "goal_dice": out_before["goal_dice"].clone(),
-        "dino_cos": out_before.get("dino_future_cos", torch.tensor(0.0)).clone(),
     }
 
     # In-phase reload (simulates what P2 would do)
@@ -194,14 +180,11 @@ def phase_switch_parity(vla, p1_model, loader):
     p1_reload = P1NoMaskWrapper(backbone=backbone2, loss_weights=vla.transition_loss_weights).to("cuda")
     p1_reload.eval()
 
-    out_after = p1_reload(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids, dino_future_target=dino_fut)
+    out_after = p1_reload(vlm_hidden, cur_masks, fut_masks, gl_masks, rel_ids)
 
     z_diff = (ref["z_student"] - out_after["transition_tokens"]).abs().max().item()
-    dc_diff = abs(ref["dino_cos"].item() - out_after.get("dino_future_cos", torch.tensor(0.0)).item())
 
     print(f"  z_student max_abs_diff:  {z_diff:.2e} {'✅' if z_diff<1e-5 else '❌'}")
-    print(f"  DINO cos diff:           {dc_diff:.2e}")
-    print(f"  DINO cos (before):       {ref['dino_cos'].item():.4f}")
 
     if z_diff >= 1e-5:
         raise RuntimeError(f"Phase switch parity FAILED: z_diff={z_diff:.2e}")
@@ -226,8 +209,6 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
         p.requires_grad_(True)
     for p in vla.proprio_encoder.parameters():
         p.requires_grad_(True)
-    for p in vla.dino_spatial_projector.parameters():
-        p.requires_grad_(True)
     for p in vla.action_model.parameters():
         p.requires_grad_(True)
 
@@ -240,13 +221,27 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
 
     best_action = float("inf")
     data_iter = iter(loader)
+
+    # Eval step 0 baseline
+    vla.eval()
+    eval_al0 = []
+    eval_iter = iter(loader)
+    with torch.no_grad():
+        for _ in range(min(args.eval_batches, 50)):
+            try: eb = next(eval_iter)
+            except StopIteration: break
+            eo = vla.forward(eb)
+            eval_al0.append(eo.get("action_loss", torch.tensor(0)).item())
+    print(f"  📊 Eval step 0: action={np.mean(eval_al0):.4f}")
+    # Re-create data_iter for training (eval consumed batches)
+    data_iter = iter(loader)
+
     for step in range(args.p2_steps):
         try: batch = next(data_iter)
         except StopIteration: data_iter = iter(loader); batch = next(data_iter)
 
         vla.train()
-        for m in [p1_model.backbone, vla.dino_encoder]:
-            if m is not None: m.eval()
+        p1_model.backbone.eval()
 
         out = vla.forward(batch)
         loss = out["total_loss"]
@@ -257,10 +252,9 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
         opt.step(); sched.step()
 
         al = out.get("action_loss", torch.tensor(0)).item()
-        dc = out.get("dino_future_cos", torch.tensor(0)).item()
         gate = torch.sigmoid(vla.transition_action_adapter.gate_logit).item()
         if step % 50 == 0 or step == args.p2_steps - 1:
-            print(f"  P2 {step:4d}: action={al:.4f} Dc={dc:.3f} gate={gate:.3f} lr={sched.get_last_lr()[0]:.2e}")
+            print(f"  P2 {step:4d}: action={al:.4f} gate={gate:.3f} lr={sched.get_last_lr()[0]:.2e}")
 
         if (step + 1) % args.eval_interval == 0:
             vla.eval()
@@ -276,7 +270,7 @@ def phase2_train(args, vla, p1_model, loader, output_dir):
             print(f"  📊 Eval {step+1}: action={avg_al:.4f}")
             if avg_al < best_action:
                 best_action = avg_al
-                torch.save({"model_state_dict": {k:v.cpu() for k,v in vla.state_dict().items() if any(p in k for p in ['spatial_backbone','transition_action_adapter','proprio_encoder','dino_spatial_projector','action_model'])}}, str(output_dir / "best_p2.pt"))
+                torch.save({"model_state_dict": {k:v.cpu() for k,v in vla.state_dict().items() if any(p in k for p in ['spatial_backbone','transition_action_adapter','proprio_encoder','action_model'])}}, str(output_dir / "best_p2.pt"))
                 print(f"  🏆 Best P2 (action={best_action:.4f})")
             vla.train()
 
