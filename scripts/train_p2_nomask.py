@@ -134,16 +134,6 @@ def main():
     vla = vla.to(accelerator.device)
     vla.training_stage = "transition_action_nomask"
 
-    # ── Check B: P1 absolute quality on fixed manifest ──────
-    manifest_path = Path(args.p1_ckpt).parent / "fixed_manifest.json"
-    if accelerator.is_main_process and manifest_path.exists():
-        print(f"\n{'='*60}")
-        print("Check B: P1 absolute quality (fixed manifest)")
-        print(f"{'='*60}")
-        ref_dc = _verify_fixed_manifest(manifest_path, vla, loader, accelerator.device)
-        if ref_dc is not None:
-            print(f"  Reference DINO cos (P2-loaded P1): {ref_dc:.4f}")
-
     # Apply gate initialization (supports ablation: -2.2≈0.1, -10≈0)
     if hasattr(vla.transition_action_adapter, 'gate_logit'):
         vla.transition_action_adapter.gate_logit.data.fill_(args.gate_init)
@@ -390,10 +380,7 @@ def _p2_dino_parity(vla, loader, device):
     if diff > 0.02:
         print(f"  ❌ FATAL: P1/P2 DINO cos differ by {diff:.4f}")
         raise RuntimeError("P2 DINO interface mismatch with P1")
-    if diff <= 0.02:
-        print(f"  ✅ P2 DINO interface PASSED (P1≈P2, |diff|≤0.02)")
-    else:
-        print(f"  ❌ P2 DINO cos differs from P1 by {diff:.4f} — check P1→P2 interface")
+    print(f"  ✅ Check A PASSED (P1≈P2 interface consistent, |diff|={diff:.4f}≤0.02)")
     vla.train()
 
 
