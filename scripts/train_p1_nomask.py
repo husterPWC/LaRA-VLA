@@ -261,12 +261,12 @@ def main():
             tR = out.get("teacher_RelAcc", torch.tensor(0)).item()
             tDC = out.get("teacher_dino_cos", torch.tensor(0)).item()
             dw = out.get("distill_weight", torch.tensor(0)).item()
-            # dino_future_head grad norm
+            # dino_future_head grad norm (inside backbone)
             dino_grad_norm = 0.0
             if hasattr(p1_model, 'module'):
-                dh = getattr(p1_model.module, 'dino_future_head', None)
+                dh = p1_model.module.backbone.dino_future_head
             else:
-                dh = getattr(p1_model, 'dino_future_head', None)
+                dh = p1_model.backbone.dino_future_head
             if dh is not None:
                 dino_grad_norm = sum(p.grad.norm().item() for p in dh.parameters() if p.grad is not None)
             print(f"  Step {step:5d}: total={loss.item():.4f} (S) "
