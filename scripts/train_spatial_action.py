@@ -504,6 +504,10 @@ def main():
     _log(f"  Frame split: {len(train_subset)} train + {len(val_subset)} val frames")
     _log(f"  Fixed eval set: {n_eval} val samples ({len(eval_loader)} batches)")
 
+    # Sync all ranks before training
+    if dist.is_initialized():
+        dist.barrier()
+
     # Phase 1
     best_p1, p1_model = phase1_train(args, vla, train_loader, eval_loader, output_dir, local_rank)
     if _is_main() and best_p1 is not None:
