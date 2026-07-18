@@ -429,8 +429,8 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     if world_size > 1:
-        dist.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", init_method="env://")
 
     if _is_main():
         print("=" * 60)
@@ -488,10 +488,10 @@ def main():
         train_sampler = DistributedSampler(train_subset, shuffle=True)
         train_loader = DataLoader(train_subset, batch_size=args.batch_size, shuffle=False,
                                   sampler=train_sampler,
-                                  collate_fn=lambda batch: batch, num_workers=2, pin_memory=True)
+                                  collate_fn=lambda batch: batch, num_workers=0, pin_memory=True)
     else:
         train_loader = DataLoader(train_subset, batch_size=args.batch_size, shuffle=True,
-                                  collate_fn=lambda batch: batch, num_workers=2, pin_memory=True)
+                                  collate_fn=lambda batch: batch, num_workers=0, pin_memory=True)
 
     # Fixed eval loader on val subset — rank 0 only
     n_eval = min(args.eval_samples, len(val_subset))
@@ -506,7 +506,7 @@ def main():
 
     # Sync all ranks before training
     if dist.is_initialized():
-        dist.barrier()
+        dist.barrier(device_ids=[local_rank])
 
     # Phase 1
     best_p1, p1_model = phase1_train(args, vla, train_loader, eval_loader, output_dir, local_rank)
