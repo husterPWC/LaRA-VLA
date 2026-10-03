@@ -13,9 +13,20 @@ checkpoint="${LARA_CHECKPOINT:-${workspace}/checkpoints/repro_r1_official/checkp
 port="${LARA_PORT:-10093}"
 gpu_id="${LARA_GPU_ID:-0}"
 log_root="${LARA_R1_LOG_ROOT:-${repo_root}/logs/repro_r1}"
+conda_base="${CONDA_BASE:-${HOME}/miniconda3}"
+laravla_python="${LARAVLA_PYTHON:-${conda_base}/envs/lara-vla/bin/python}"
+libero_python="${LIBERO_PYTHON:-${conda_base}/envs/libero/bin/python}"
 
 if [[ ! -f "${checkpoint}" ]]; then
   echo "checkpoint does not exist: ${checkpoint}" >&2
+  exit 1
+fi
+if [[ ! -x "${laravla_python}" ]]; then
+  echo "LaRA Python is not executable: ${laravla_python}" >&2
+  exit 1
+fi
+if [[ ! -x "${libero_python}" ]]; then
+  echo "LIBERO Python is not executable: ${libero_python}" >&2
   exit 1
 fi
 mkdir -p "${log_root}/client" /tmp/lara-numba-cache /tmp/lara-matplotlib
@@ -25,7 +36,7 @@ if [[ "${component}" == "server" ]]; then
   export TRANSFORMERS_OFFLINE=1
   export CUDA_VISIBLE_DEVICES="${gpu_id}"
   export PYTHONPATH="${repo_root}"
-  exec /home/robot/miniconda3/envs/lara-vla/bin/python -u \
+  exec "${laravla_python}" -u \
     "${repo_root}/deployment/model_server/server_policy.py" \
     --ckpt_path "${checkpoint}" \
     --port "${port}" \
@@ -42,7 +53,7 @@ export CUDA_VISIBLE_DEVICES="${gpu_id}"
 export NUMBA_CACHE_DIR=/tmp/lara-numba-cache
 export MPLCONFIGDIR=/tmp/lara-matplotlib
 
-exec /usr/bin/time -v /home/robot/miniconda3/envs/libero/bin/python -u \
+exec /usr/bin/time -v "${libero_python}" -u \
   "${repo_root}/examples/LIBERO/eval_libero.py" \
   --args.pretrained-path "${checkpoint}" \
   --args.host 127.0.0.1 \

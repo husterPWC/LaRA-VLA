@@ -15,7 +15,7 @@ def versions(names):
     print("python", sys.version, "executable", sys.executable)
 
 
-def server():
+def server(check_training_data=True):
     import numpy as np
     import torch
     import torchvision
@@ -51,14 +51,17 @@ def server():
         for token in ("<|thinking|>", "<|start_of_thinking|>", "<|end_of_thinking|>", "<img_next>"):
             print("backbone token", token, processor.tokenizer.convert_tokens_to_ids(token))
         print("processor", type(processor).__name__)
-    dataset_root = Path(os.environ["LARA_DATASET_ROOT"])
-    video = next((dataset_root / "libero_spatial_no_noops_1.0.0_lerobot" / "videos").rglob("*.mp4"))
-    frames = get_frames_by_timestamps(
-        str(video), np.array([0.0, 1.0, 2.0]), video_backend="torchvision_av"
-    )
-    assert frames.shape == (3, 256, 256, 3) and frames.dtype == np.uint8
-    assert np.isfinite(frames).all() and frames.std() > 0
-    print("torchvision_av AV1", frames.shape, str(frames.dtype), "std", float(frames.std()))
+    if check_training_data:
+        dataset_root = Path(os.environ["LARA_DATASET_ROOT"])
+        video = next((dataset_root / "libero_spatial_no_noops_1.0.0_lerobot" / "videos").rglob("*.mp4"))
+        frames = get_frames_by_timestamps(
+            str(video), np.array([0.0, 1.0, 2.0]), video_backend="torchvision_av"
+        )
+        assert frames.shape == (3, 256, 256, 3) and frames.dtype == np.uint8
+        assert np.isfinite(frames).all() and frames.std() > 0
+        print("torchvision_av AV1", frames.shape, str(frames.dtype), "std", float(frames.std()))
+    else:
+        print("training dataset decode SKIPPED (evaluation-only host)")
     print("R0 SERVER PASS (imports and CUDA only; checkpoint not loaded)")
 
 
@@ -96,6 +99,10 @@ def client():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("component", choices=["server", "client"])
+    parser.add_argument("component", choices=["server", "server-eval", "client"])
     args = parser.parse_args()
-    {"server": server, "client": client}[args.component]()
+    {
+        "server": server,
+        "server-eval": lambda: server(check_training_data=False),
+        "client": client,
+    }[args.component]()

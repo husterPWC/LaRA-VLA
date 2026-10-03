@@ -6,6 +6,8 @@ Rebuilt on 2026-10-03 after the old checkout and environments were removed.
 R0 is environment validation; R1 is an actual released-checkpoint rollout.
 R2 is official 2,000-rollout evaluation on the server. R3/R4 training remains
 blocked until checkpoint evaluation is validated. No Spatial-LaRA changes.
+The from-scratch server procedure is maintained in
+[`R2_SERVER_RUNBOOK.md`](R2_SERVER_RUNBOOK.md).
 
 - Fork: https://github.com/husterPWC/LaRA-VLA
 - Upstream: https://github.com/LoveJu1y/LaRA-VLA.git
