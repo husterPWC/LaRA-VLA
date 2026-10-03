@@ -234,7 +234,7 @@ run_suite_eval() {
     "${video_args[@]}" \
     --args.enable-latent-reasoning \
     --args.cot-mode implicit \
-    --args.log_path "${LOG_DIR}" \
+    --args.log-path "${LOG_DIR}" \
     > "${stdout_log}" 2>&1 &
   eval_pids+=("$!")
 }
