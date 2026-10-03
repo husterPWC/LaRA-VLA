@@ -78,7 +78,17 @@ The previous fork's `LARAVLA_VLM_PATH` patch is absent from this clean fork.
 R1 must explicitly configure the existing backbone through the official
 `framework.qwenvl.base_vlm` mechanism; do not assume that old variable works.
 Do not overwrite released configuration without preserving its original and
-recording the path-only change. That preparation is deferred to R1.
+recording the path-only change. Prepare an isolated run view with:
+
+```bash
+python scripts/reproduction/prepare_official_checkpoint.py \
+  --source-run ../checkpoints/LaRA-VLA-libero \
+  --backbone ../StarVLA-Qwen3-VL-4B-Instruct-Action \
+  --output-run ../checkpoints/repro_r1_official
+```
+
+The generated manifest states that only `framework.qwenvl.base_vlm` changed;
+the active checkpoint is an absolute symlink to the released bytes.
 
 ## R0 acceptance
 
