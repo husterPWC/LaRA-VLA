@@ -1,0 +1,105 @@
+{
+  "status": "pass",
+  "git_commit": "8fbb10816b8ecf62274771392d1d46af38b4ed23",
+  "checkpoint": "/home/robot/codePWC/LaRA/checkpoints/repro_r1_official/checkpoints/steps_25000_pytorch_model.pt",
+  "strict_state_dict_match": true,
+  "missing_keys": [],
+  "unexpected_keys": [],
+  "load_seconds": 11.460420825053006,
+  "versions": {
+    "python_torch": "2.6.0+cu124",
+    "transformers": "4.57.0"
+  },
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3090",
+    "allocated_bytes": 9218526720,
+    "reserved_bytes": 9225371648,
+    "peak_allocated_bytes": 9218529280
+  },
+  "parameters": {
+    "total": 4604531463,
+    "trainable": 4604531463
+  },
+  "model": {
+    "class": "Qwen_GR00T",
+    "backbone_class": "Qwen3VLForConditionalGeneration",
+    "processor_class": "Qwen3VLProcessor",
+    "latent_reasoning_enabled": true,
+    "image_next_enabled": true,
+    "image_next_teacher": false,
+    "action_dim": 7,
+    "state_dim": 7,
+    "action_horizon": 8,
+    "future_action_window_size": 7
+  },
+  "tokenizer": {
+    "token_ids": {
+      "<|thinking|>": 153717,
+      "<|start_of_thinking|>": 153718,
+      "<|end_of_thinking|>": 153719,
+      "<img_next>": 153720
+    },
+    "inference_prompt_token_counts": {
+      "<|thinking|>": 3,
+      "<|start_of_thinking|>": 1,
+      "<|end_of_thinking|>": 1,
+      "<img_next>": 16
+    },
+    "formatted_instruction": "put the bowl on the plate. @ <|start_of_thinking|><|thinking|><|thinking|><|thinking|><|end_of_thinking|> <img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next>",
+    "input_ids_shape": [
+      1,
+      134
+    ],
+    "pixel_values_shape": [
+      256,
+      1536
+    ],
+    "image_grid_thw": [
+      [
+        1,
+        16,
+        16
+      ]
+    ]
+  },
+  "real_frame": {
+    "source_video": "/data/CodePWC/lara_datasets/libero_lerobot_all/libero_goal_no_noops_1.0.0_lerobot/videos/chunk-000/observation.images.image/episode_000053.mp4",
+    "shape": [
+      256,
+      256,
+      3
+    ],
+    "dtype": "uint8",
+    "standard_deviation": 53.00076423736105
+  },
+  "normalization": {
+    "key": "franka",
+    "q01": [
+      -0.8785714507102966,
+      -0.8758928775787354,
+      -0.9375,
+      -0.1510714292526245,
+      -0.20678570866584778,
+      -0.2742857038974762,
+      0.0
+    ],
+    "q99": [
+      0.9375,
+      0.9107142686843872,
+      0.9375,
+      0.20357142388820648,
+      0.26357144117355347,
+      0.375,
+      1.0
+    ],
+    "mask": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  }
+}

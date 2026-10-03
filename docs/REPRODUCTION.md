@@ -88,7 +88,11 @@ python scripts/reproduction/prepare_official_checkpoint.py \
 ```
 
 The generated manifest states that only `framework.qwenvl.base_vlm` changed;
-the active checkpoint is an absolute symlink to the released bytes.
+the active checkpoint is a hard link to the released bytes. A symbolic link is
+not valid here because the official loader resolves the checkpoint path before
+locating its sibling configuration, which would select the untouched source
+run configuration and its remote backbone name. The hard link avoids a second
+10.3 GB copy while keeping configuration lookup inside the isolated run view.
 
 ## R0 acceptance
 
@@ -105,8 +109,82 @@ R0 passing cannot be used as evidence of checkpoint loading or R1 success.
 
 Status: **PASS on 2026-10-03**. Both pip checks, actual imports, GPU/native
 extension probes, real AV1 decode, all task initial states, and EGL rendering
-completed successfully. This closes environment R0 only; checkpoint loading and
-an actual rollout remain R1 work.
+completed successfully. This closes environment R0 only.
+
+## R1 released-checkpoint inference smoke test
+
+Status: **PASS on 2026-10-04** at LaRA commit
+`8fbb10816b8ecf62274771392d1d46af38b4ed23` and LIBERO commit
+`8f1084e3132a39270c3a13ebe37270a43ece2a01`.
+
+First prepare the path-only local checkpoint view, then run the strict preflight:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
+PYTHONPATH="$PWD" \
+/home/robot/miniconda3/envs/lara-vla/bin/python \
+  scripts/reproduction/check_official_checkpoint.py \
+  --checkpoint ../checkpoints/repro_r1_official/checkpoints/steps_25000_pytorch_model.pt \
+  --dataset-root /data/CodePWC/lara_datasets/libero_lerobot_all \
+  --output results/r1_checkpoint_preflight.json
+```
+
+The preflight loads through the official `baseframework.from_pretrained` path.
+It found an exact state-dict match: no missing or unexpected keys and no
+strict=False compatibility fallback. It verified the Qwen3-VL model and
+processor, a real LIBERO Goal frame, action/state dimensions 7, action horizon
+8, and the `franka` normalization statistics. The formal inference prompt
+contains one start token, three thinking tokens, one end token, and 16
+`<img_next>` tokens. Loaded model memory was 9.22 GB by PyTorch accounting.
+
+Run the actual rollout in two terminals. Both commands call the official server
+and evaluator; the wrapper only fixes the recorded R1 paths and arguments.
+
+Terminal A:
+
+```bash
+cd /home/robot/codePWC/LaRA/LaRA-VLA
+scripts/reproduction/smoke_inference.sh server \
+  2>&1 | tee logs/repro_r1/server.log
+```
+
+Terminal B, after the server reports `server listening`:
+
+```bash
+cd /home/robot/codePWC/LaRA/LaRA-VLA
+scripts/reproduction/smoke_inference.sh client \
+  2>&1 | tee logs/repro_r1/client_stdout.log
+```
+
+The evaluated episode was `libero_goal`, task 0, seed 7, one rollout: “open
+the middle drawer of the cabinet.” It succeeded (1/1). The client exited 0 in
+15.72 seconds. The policy served 16 action chunks and logged four iterative
+latent-reasoning passes for every inference. A 200 ms external sample recorded
+9,767 MiB peak GPU-0 memory and 93% peak utilization; the model was restricted
+to the single RTX 3090 exposed as CUDA device 0. No policy fallback, shape
+failure, NaN/Inf, server error, or OOM occurred.
+
+Both environment cameras were 256x256x3 uint8 and the unchanged client resized
+them to 224x224x3 before transmission. The returned normalized action tensor was
+1x8x7, matching the eight-step horizon and seven-dimensional action contract.
+The evaluator constructs a 1x8 robot-state array but does not include it in the
+server request; the checkpoint therefore runs with `state=None`. This is
+official repository behavior, recorded as an R2 consistency risk rather than
+silently changed during R1.
+
+Raw logs stay in ignored `logs/repro_r1/`. Reviewable evidence is committed as
+`results/r1_checkpoint_preflight.json` and
+`results/r1_official_checkpoint_smoke.json`. LIBERO emits a trusted-file
+`torch.load` future warning. After successful result logging, robosuite's EGL
+destructors report a repeated context-free warning; the client still exits 0.
+No source patch suppresses either warning.
+
+R1 required one evaluation-only source extension: optional `task_id` selects a
+single task, while its default `None` preserves the upstream all-task loop.
+The first checkpoint view used a symbolic link, exposing the official loader's
+path-resolution behavior described above. Commit `f44406e` changes only the
+reproduction preparation script to use a hard link. No model, loss, prompt,
+normalization, action post-processing, or environment semantics changed.
 
 ### Dependency packaging root causes (2026-10-03)
 
@@ -164,10 +242,15 @@ These were identified at the baseline above; rebuilding the environments does
 not fix them. Investigate and document separately, with minimal independent
 commits when needed, rather than silently changing the method.
 
-- Official evaluator loops all tasks; one rollout/task is ten episodes, not a
-  single task. R1 needs a task-selector parameter retaining default behavior.
 - Evaluator constructs state but does not send it to the policy. Preserve the
   official behavior until its role is established.
+- The LIBERO client unnormalizes actions with `min/max`, while the duplicate
+  base-framework helper uses `q01/q99`. R1 preserves the official LIBERO
+  client behavior; confirm the released protocol before interpreting R2 gaps.
+- The final duplicate `baseframework.get_action_stats` is marked as a
+  classmethod but attempts to access instance `norm_stats`. LIBERO evaluation
+  reads the same statistics directly and is unaffected; no model-source fix
+  was needed for R1.
 - Checkpoint loader contains optional-module strict=False compatibility logic;
   record and explain any missing/unexpected keys during R1.
 - README's LIBERO_LEROBOT_ROOT variable is not consumed by the training path;
