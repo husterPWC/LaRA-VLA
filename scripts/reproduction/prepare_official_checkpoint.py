@@ -6,6 +6,7 @@ the active YAML; the checkpoint is linked rather than copied.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -77,13 +78,19 @@ def main() -> None:
     )
 
     checkpoint_link = checkpoints / args.checkpoint_name
+    # read_mode_config() resolves the checkpoint path before locating config.yaml.
+    # A symlink would therefore escape this local run view and silently select the
+    # untouched upstream config.  A hard link retains one copy of the 10 GB file
+    # while keeping path resolution inside output/checkpoints.
     if checkpoint_link.is_symlink():
         if checkpoint_link.resolve() != source_checkpoint:
             raise RuntimeError(f"Existing link points elsewhere: {checkpoint_link}")
-    elif checkpoint_link.exists():
-        raise FileExistsError(checkpoint_link)
+        checkpoint_link.unlink()
+    if checkpoint_link.exists():
+        if not os.path.samefile(checkpoint_link, source_checkpoint):
+            raise FileExistsError(checkpoint_link)
     else:
-        checkpoint_link.symlink_to(source_checkpoint)
+        os.link(source_checkpoint, checkpoint_link)
 
     manifest = {
         "source_run": str(source),
@@ -95,6 +102,7 @@ def main() -> None:
         "base_vlm_after": str(backbone),
         "changed_config_fields": changes,
         "prepared_checkpoint": str(checkpoint_link),
+        "checkpoint_materialization": "hardlink",
     }
     (output / "reproduction_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
