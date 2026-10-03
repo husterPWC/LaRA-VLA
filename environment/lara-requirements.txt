@@ -1,0 +1,33 @@
+# Derived from upstream 93b5c03 requirements.txt.
+# PyTorch3D v0.7.6 is built from pinned official source; decord v0.6.0 is
+# installed from the upstream wheel after correcting only its internal ABI tag.
+# eva-decord overlaps decord files and is omitted; official loader uses torchvision_av.
+# See docs/REPRODUCTION.md for the packaging root cause and validation.
+transformers==4.57.0
+accelerate==1.5.2
+tiktoken
+einops
+transformers_stream_generator==0.0.4
+scipy
+torchvision==0.21.0
+pillow
+tensorboard
+matplotlib
+websocket-client==1.8.0
+albumentations==1.4.18
+pydantic==2.10.6
+pyarrow==14.0.1
+fastparquet==2024.11.0
+av
+numpydantic==1.6.9
+deepspeed==0.16.9
+qwen-vl-utils
+omegaconf
+numpy==1.26.4
+wandb
+rich
+diffusers
+timm
+setuptools==75.8.0
+websockets==15.0.1
+msgpack==1.1.1

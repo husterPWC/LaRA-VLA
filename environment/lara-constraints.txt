@@ -1,0 +1,5 @@
+# Preserve upstream numerical stack while resolving unpinned dependencies.
+torch==2.6.0
+torchvision==0.21.0
+numpy==1.26.4
+setuptools==75.8.0

@@ -1,0 +1,28 @@
+Captured: 2026-10-03 Asia/Shanghai
+OS: Ubuntu 22.04.5 LTS
+Kernel: Linux 6.8.0-40-generic x86_64
+GPU 0: NVIDIA GeForce RTX 3090, 24576 MiB
+GPU 1: NVIDIA GeForce RTX 3090, 24576 MiB
+NVIDIA driver: 570.144
+System CUDA toolkit: 12.4, nvcc V12.4.99
+PyTorch CUDA runtime: 12.4
+cuDNN reported by PyTorch: 90100
+LaRA Python: 3.10.22
+LIBERO Python: 3.10.22
+LaRA commit: 93b5c03c691e38a3c9e90878e76557009e2df261
+LIBERO commit: 8f1084e3132a39270c3a13ebe37270a43ece2a01
+origin: https://github.com/husterPWC/LaRA-VLA
+upstream: https://github.com/LoveJu1y/LaRA-VLA.git
+
+R0 acceptance:
+- lara-vla pip check: PASS
+- libero pip check: PASS
+- LaRA training/model/dataset imports: PASS
+- Qwen3 processor local load: PASS
+- RTX 3090 BF16 arithmetic: PASS
+- PyTorch3D native CUDA KNN: PASS
+- LIBERO 40 tasks initial states: PASS
+- MuJoCo EGL Goal task 0 reset/render, two 256x256 cameras: PASS
+- Official torchvision_av path, real 256x256 AV1 frames: PASS
+- Checkpoint/model weight loading: NOT RUN (R1)
+- Policy rollout: NOT RUN (R1)

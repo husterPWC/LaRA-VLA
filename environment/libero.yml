@@ -1,0 +1,8 @@
+name: libero
+channels:
+  - defaults
+dependencies:
+  - python=3.10.22
+  - pip=26.2.1
+# Install CPU torch 2.5.1 and torchvision 0.20.1, then
+# environment/libero-requirements.txt and the pinned LIBERO checkout editable.

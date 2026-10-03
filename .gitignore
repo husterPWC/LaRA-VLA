@@ -235,3 +235,21 @@ starVLA/model/modules/sam_model/*
 assets/SAMv2.txt
 playground/*
 qwen_talk.md
+
+# Reproduction: keep external data/weights and generated artifacts out of Git.
+datasets/
+checkpoints/
+wandb/
+hf_cache/
+logs/
+*.pt
+*.pth
+*.safetensors
+*.npy
+*.npz
+# The upstream rule ignores results wholesale; permit small result summaries only.
+!results/
+results/*
+!results/README.md
+!results/*.json
+!results/*.csv

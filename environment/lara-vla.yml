@@ -1,0 +1,9 @@
+name: lara-vla
+channels:
+  - defaults
+dependencies:
+  - python=3.10.22
+  - pip=26.2.1
+# Install torch 2.6.0 and torchvision 0.21.0 from the cu124 PyTorch index,
+# then environment/lara-requirements.txt and the two wheels produced by
+# scripts/reproduction/build_dependency_wheels.sh. Install this repo editable.
