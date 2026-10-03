@@ -38,6 +38,7 @@ class Args:
     # LIBERO environment-specific parameters
     #################################################################################################################
     task_suite_name: str = "libero_goal"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
+    task_id: int | None = None  # None evaluates every task; set one ID for a reproducible smoke test
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
 
@@ -75,7 +76,9 @@ def eval_libero(args: Args) -> None:
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[args.task_suite_name]()
     num_tasks_in_suite = task_suite.n_tasks
+    task_ids = _resolve_task_ids(num_tasks_in_suite, args.task_id)
     logging.info(f"Task suite: {args.task_suite_name}")
+    logging.info(f"Task IDs: {list(task_ids)}")
 
     if args.save_videos:
         pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
@@ -85,6 +88,7 @@ def eval_libero(args: Args) -> None:
     log_file_path = pathlib.Path(args.log_path) / f"{args.task_suite_name}.log"
     log_file = open(log_file_path, "w")
     log_file.write(f"Task suite: {args.task_suite_name}\n")
+    log_file.write(f"Task IDs: {list(task_ids)}\n")
     # args.video_out_path = f"{date_base}+{args.job_name}"
     # pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
 
@@ -115,7 +119,7 @@ def eval_libero(args: Args) -> None:
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    for task_id in tqdm.tqdm(task_ids):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -281,6 +285,14 @@ def eval_libero(args: Args) -> None:
         f"Total success rate: {float(total_successes) / float(total_episodes)}"
     )
     logging.info(f"Total episodes: {total_episodes}")
+
+
+def _resolve_task_ids(num_tasks: int, task_id: int | None):
+    if task_id is None:
+        return range(num_tasks)
+    if task_id < 0 or task_id >= num_tasks:
+        raise ValueError(f"task_id must be in [0, {num_tasks - 1}], got {task_id}")
+    return [task_id]
 
 
 def _get_libero_env(task, resolution, seed):
