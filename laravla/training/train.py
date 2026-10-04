@@ -794,6 +794,9 @@ def main(cfg) -> None:
     logger.info("ECoT VLA Training :: Warming Up")
 
     accelerator = build_accelerator(cfg)
+    seed = int(getattr(cfg, "seed", 42)) + accelerator.process_index
+    set_seed(seed)
+    accelerator.print(f"Seed set before model initialization: {seed}")
 
     mode_flags = get_implicit_flags()
 

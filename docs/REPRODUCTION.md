@@ -336,6 +336,15 @@ dataloader 重建时递增，避免跨 epoch 重复同一批 `(epoch, index, see
 total/trainable/frozen 参数量。该检查只验证官方 forward 的真实输出，不增加
 或替换 loss。
 
+### R3 模型初始化 seed 修复
+
+官方训练器原来在模型和 optimizer 创建完成后才调用 `set_seed`。Stage III 只从
+Stage II checkpoint 加载 `qwen_vl_interface`，连续 action head 需要重新随机
+初始化；因此原顺序使 action head 不受配置中的 `seed` 控制。现在在
+`Accelerator` 完成 rank/device 初始化后、构建模型前按
+`cfg.seed + process_index` 设置随机种子。训练准备阶段仍会用同一规则再次设置，
+不改变后续数据和训练随机流的约定。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
