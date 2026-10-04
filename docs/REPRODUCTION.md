@@ -222,6 +222,51 @@ R1 对 evaluator 只增加可选 `task_id`；默认 `None` 保留官方遍历全
 - gradient accumulation、gradient checkpointing、num_workers、DDP device
   placement、optimizer/scheduler/RNG resume 都要在 R3/R4 前逐项验证。
 
+## R3 训练数据预检
+
+R3 使用的数据根目录是：
+
+```text
+/data/CodePWC/lara_datasets/libero_lerobot_all
+```
+
+旧目录 `clip-rt/modified_libero_hdf5` 中的四个 HDF5 文件均为 0 字节，
+不是可用训练数据，也不是官方当前 README 要求的 LeRobot 数据布局。
+
+离散 action supervision 使用官方配置指定的
+`physical-intelligence/fast`。为防止 Hugging Face `main` 漂移，本次固定到提交：
+
+```text
+ec4d7aa71691cac0b8bed6942be45684db2110f4
+```
+
+其中 `tokenizer.json` 的 SHA256 为：
+
+```text
+6507dd709287fd018882120c0071787f1f62bad9f180f1e8c5235bda1b71fa78
+```
+
+依赖文件保存在仓库外的
+`/home/robot/codePWC/LaRA/dependencies/physical-intelligence-fast/<revision>`，
+不进入 Git。FAST 的 8×7 action 编解码测试通过；由于其 DCT 量化，测试样本
+最大绝对重建误差约为 0.043。
+
+`scripts/reproduction/check_training_data.py` 直接调用官方 dataset、transform、
+视频解码和 reasoning formatter。Stage 1–4 均已逐 suite 验证通过：
+
+| 数据集 | transitions | trajectories | 图像 | action |
+|---|---:|---:|---|---|
+| LIBERO Object | 66,984 | 454 | 当前/下一帧各 2×224×224×3 | 8×7 |
+| LIBERO Goal | 52,042 | 428 | 当前/下一帧各 2×224×224×3 | 8×7 |
+| LIBERO Spatial | 52,970 | 432 | 当前/下一帧各 2×224×224×3 | 8×7 |
+| LIBERO-10 | 101,469 | 379 | 当前/下一帧各 2×224×224×3 | 8×7 |
+
+四套数据的 mixture sampling weight 均为 0.25。抽取的真实样本均有 CoT、
+bbox、FAST action tokens 和 16 个 `<img_next>`；Stage 1/2/3/4 的
+`<|thinking|>` 数量依次为 0/1/2/3，与课程替换顺序一致。机器可读结果位于
+`results/r3_training_data_stage1.json` 至
+`results/r3_training_data_stage4.json`。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、

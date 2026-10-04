@@ -1,0 +1,200 @@
+{
+  "status": "pass",
+  "config": "/home/robot/codePWC/LaRA/LaRA-VLA/laravla/config/training/libero.yaml",
+  "dataset_root": "/data/CodePWC/lara_datasets/libero_lerobot_all",
+  "fast_tokenizer": {
+    "path": "/home/robot/codePWC/LaRA/dependencies/physical-intelligence-fast/ec4d7aa71691cac0b8bed6942be45684db2110f4",
+    "revision": "ec4d7aa71691cac0b8bed6942be45684db2110f4",
+    "tokenizer_json_sha256": "6507dd709287fd018882120c0071787f1f62bad9f180f1e8c5235bda1b71fa78"
+  },
+  "stage": 2,
+  "mixture_length": 405876,
+  "dataset_sampling_weights": [
+    0.25,
+    0.25,
+    0.25,
+    0.25
+  ],
+  "samples": [
+    {
+      "dataset": "libero_object_no_noops_1.0.0_lerobot",
+      "steps": 66984,
+      "trajectories": 454,
+      "trajectory_id": 0,
+      "base_index": 0,
+      "action_shape": [
+        8,
+        7
+      ],
+      "action_dtype": "float64",
+      "action_min": -0.32984291281199907,
+      "action_max": 1.0,
+      "image_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_fallback": false,
+      "cot_available": true,
+      "bbox_valid": true,
+      "action_token_count": 4,
+      "thinking_token_count": 1,
+      "img_next_token_count": 16,
+      "formatted_instruction": "pick up the orange juice and place it in the basket. @ <|start_of_thinking|><|thinking|><|end_of_thinking|> BBox: [0.4805 0.5820 0.6328 0.6523]. Reasoning: globally the gripper should progress towards the forward-left and lower direction, locally it is moving backward-right. <img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next>"
+    },
+    {
+      "dataset": "libero_goal_no_noops_1.0.0_lerobot",
+      "steps": 52042,
+      "trajectories": 428,
+      "trajectory_id": 0,
+      "base_index": 0,
+      "action_shape": [
+        8,
+        7
+      ],
+      "action_dtype": "float64",
+      "action_min": -0.22513087969553436,
+      "action_max": 1.0,
+      "image_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_fallback": false,
+      "cot_available": true,
+      "bbox_valid": true,
+      "action_token_count": 4,
+      "thinking_token_count": 1,
+      "img_next_token_count": 16,
+      "formatted_instruction": "put the bowl on the plate. @ <|start_of_thinking|><|thinking|><|end_of_thinking|> BBox: [0.5000 0.4336 0.6055 0.5664]. Reasoning: globally the gripper should progress towards the forward-right and lower direction, locally it is moving backward-right. <img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next>"
+    },
+    {
+      "dataset": "libero_spatial_no_noops_1.0.0_lerobot",
+      "steps": 52970,
+      "trajectories": 432,
+      "trajectory_id": 0,
+      "base_index": 0,
+      "action_shape": [
+        8,
+        7
+      ],
+      "action_dtype": "float64",
+      "action_min": -0.3057142893473307,
+      "action_max": 1.0,
+      "image_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_fallback": false,
+      "cot_available": true,
+      "bbox_valid": true,
+      "action_token_count": 3,
+      "thinking_token_count": 1,
+      "img_next_token_count": 16,
+      "formatted_instruction": "pick up the black bowl next to the cookie box and place it on the plate. @ <|start_of_thinking|><|thinking|><|end_of_thinking|> BBox: [0.6953 0.5312 0.8359 0.6875]. Reasoning: globally the gripper should progress towards the forward-left and lower direction, locally it is moving forward and upward. <img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next>"
+    },
+    {
+      "dataset": "libero_10_no_noops_1.0.0_lerobot",
+      "steps": 101469,
+      "trajectories": 379,
+      "trajectory_id": 0,
+      "base_index": 0,
+      "action_shape": [
+        8,
+        7
+      ],
+      "action_dtype": "float64",
+      "action_min": -0.3200000127156576,
+      "action_max": 1.0,
+      "image_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_shapes": [
+        [
+          224,
+          224,
+          3
+        ],
+        [
+          224,
+          224,
+          3
+        ]
+      ],
+      "image_next_fallback": false,
+      "cot_available": true,
+      "bbox_valid": true,
+      "action_token_count": 3,
+      "thinking_token_count": 1,
+      "img_next_token_count": 16,
+      "formatted_instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate. @ <|start_of_thinking|><|thinking|><|end_of_thinking|> BBox: [0.4258 0.6406 0.6211 0.8398] [0.4648 0.2266 0.6523 0.4414]. Reasoning: globally the gripper should progress towards the left and lower direction (first task). <img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next><img_next>"
+    }
+  ]
+}
