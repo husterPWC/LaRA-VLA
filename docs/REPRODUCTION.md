@@ -289,6 +289,32 @@ Accelerate/DeepSpeed。训练步又在每次 micro-batch forward 前调用
 均进入最终 DeepSpeed 配置。该修复只使已有工程配置真正生效，不改变模型、
 数据、loss 或 forward。
 
+### R3 checkpoint / resume 修复
+
+官方 `_save_checkpoint` 只写
+`steps_<N>_pytorch_model.pt` 和一行 step summary；它没有调用
+`accelerator.save_state()`。而 `_load_checkpoint` 却调用
+`accelerator.load_state()`，也没有恢复 `completed_steps`。因此原实现只能在
+阶段之间传递模型权重，不能恢复 optimizer、scheduler、RNG 或训练进度。
+
+修复后保留两类产物，各自用途明确：
+
+- `steps_<N>_pytorch_model.pt`：保持官方既有命名，供 Stage I → Stage II →
+  Stage III 传递权重；
+- `steps_<N>_training_state/`：由 `Accelerator.save_state()` 集体保存模型、
+  optimizer、scheduler、RNG 和 DeepSpeed 状态，并额外保存
+  `trainer_state.json` 中的 completed steps、已读取 batch 数、dataset epoch 和
+  image-next EMA 更新计数。
+
+`trainer.is_resume=true` 现在必须同时给出
+`trainer.resume_from_checkpoint=<training_state目录>`；若 metadata 缺失会直接
+失败。恢复后跳过当前 epoch 已消费的真实 batch，progress bar 从已完成 step
+继续。scheduler 也一并交给 `accelerator.prepare()`，从而进入状态保存。
+
+同时修复了 accumulation 下的重复副作用：evaluation、logging 和 checkpoint
+只在真正完成 optimizer update 的同步步执行。LeRobot mixture 的 epoch 也会在
+dataloader 重建时递增，避免跨 epoch 重复同一批 `(epoch, index, seed)` 样本。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、

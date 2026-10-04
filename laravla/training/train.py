@@ -25,7 +25,7 @@ import torch
 import torch.distributed as dist
 import wandb
 import yaml
-from accelerate import Accelerator, DeepSpeedPlugin
+from accelerate import Accelerator, DeepSpeedPlugin, skip_first_batches
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from omegaconf import OmegaConf
@@ -258,6 +258,9 @@ class LaRA_VLA_Trainer(TrainerUtils):
 
         # training status tracking
         self.completed_steps = 0
+        self.batches_seen = 0
+        self.vla_epoch_count = 0
+        self._resume_batches_to_skip = 0
         self.total_batch_size = self._calculate_total_batch_size()
         self.min_save_step = getattr(self.config.trainer, "min_save_step", 0)
         self._img_next_ema_updates = 0
@@ -268,7 +271,12 @@ class LaRA_VLA_Trainer(TrainerUtils):
         set_seed(seed)
 
         # load pretrained weights
-        if hasattr(self.config.trainer, "pretrained_checkpoint") and self.config.trainer.pretrained_checkpoint:
+        is_resume = bool(self.config.trainer.get("is_resume", False))
+        if (
+            not is_resume
+            and hasattr(self.config.trainer, "pretrained_checkpoint")
+            and self.config.trainer.pretrained_checkpoint
+        ):
             pretrained_checkpoint = self.config.trainer.pretrained_checkpoint
             reload_modules = (
                 self.config.trainer.reload_modules if hasattr(self.config.trainer, "reload_modules") else None
@@ -287,12 +295,17 @@ class LaRA_VLA_Trainer(TrainerUtils):
         self.print_trainable_parameters(self.model)
 
         # initialize distributed training components
-        self.model, self.optimizer, self.vla_train_dataloader = self.setup_distributed_training(
+        (
+            self.model,
+            self.optimizer,
+            self.vla_train_dataloader,
+            self.lr_scheduler,
+        ) = self.setup_distributed_training(
             self.accelerator,  # must be the first param
             self.model,
             self.optimizer,
             self.vla_train_dataloader,
-            # self.vlm_train_dataloader
+            self.lr_scheduler,
         )
 
         self._init_wandb()
@@ -322,38 +335,93 @@ class LaRA_VLA_Trainer(TrainerUtils):
         self.checkpoint_dir = os.path.join(self.config.output_dir, "checkpoints")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
-        pretrained_checkpoint = getattr(self.config.trainer, "pretrained_checkpoint", None)
-        is_resume = getattr(self.config.trainer, "is_resume", False)
+        is_resume = bool(self.config.trainer.get("is_resume", False))
+        resume_from_checkpoint = self.config.trainer.get(
+            "resume_from_checkpoint", None
+        )
 
         # resume training state
-        print(f"pretrained_checkpoint: {pretrained_checkpoint}")
         print(f"is_resume: {is_resume}")
-        if pretrained_checkpoint and is_resume:
-            print(f"Resuming from checkpoint: {self.config.resume_from_checkpoint}")
-            self._load_checkpoint(self.config.resume_from_checkpoint)
+        if is_resume:
+            if not resume_from_checkpoint:
+                raise ValueError(
+                    "trainer.is_resume=true 时必须设置 "
+                    "trainer.resume_from_checkpoint"
+                )
+            print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+            self._load_checkpoint(resume_from_checkpoint)
 
     def _load_checkpoint(self, checkpoint_path):
-        """load checkpoint"""
-        self.accelerator.load_state(checkpoint_path)
-        self.accelerator.print(f"Resumed from checkpoint: {checkpoint_path}")
+        """Restore model, optimizer, scheduler, RNG and trainer progress."""
+        checkpoint_path = Path(checkpoint_path).resolve(strict=True)
+        metadata_path = checkpoint_path / "trainer_state.json"
+        if not metadata_path.is_file():
+            raise FileNotFoundError(
+                f"训练状态缺少 metadata，不能执行完整 resume: {metadata_path}"
+            )
+
+        self.accelerator.load_state(str(checkpoint_path))
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.completed_steps = int(metadata["completed_steps"])
+        self.batches_seen = int(metadata["batches_seen"])
+        self.vla_epoch_count = int(metadata.get("vla_epoch_count", 0))
+        self._img_next_ema_updates = int(
+            metadata.get("img_next_ema_updates", 0)
+        )
+        self._resume_batches_to_skip = self.batches_seen % len(
+            self.vla_train_dataloader
+        )
+        dataset = getattr(self.vla_train_dataloader, "dataset", None)
+        if dataset is not None and callable(getattr(dataset, "set_epoch", None)):
+            dataset.set_epoch(self.vla_epoch_count)
+        self.accelerator.print(
+            f"Resumed from {checkpoint_path}: "
+            f"completed_steps={self.completed_steps}, "
+            f"batches_seen={self.batches_seen}, "
+            f"epoch={self.vla_epoch_count}"
+        )
 
     def _save_checkpoint(self):
-        """save current training state"""
+        """Save a stage-transfer model plus a fully resumable training state."""
+        checkpoint_path = os.path.join(
+            self.checkpoint_dir, f"steps_{self.completed_steps}"
+        )
+        state_path = checkpoint_path + "_training_state"
+
+        # DeepSpeed state saving is collective and must run on every rank.
+        self.accelerator.save_state(
+            output_dir=state_path,
+            safe_serialization=False,
+        )
+        self.accelerator.wait_for_everyone()
 
         if self.accelerator.is_main_process:
-
-            checkpoint_path = os.path.join(self.checkpoint_dir, f"steps_{self.completed_steps}")
             # save model state
             state_dict = self.accelerator.get_state_dict(self.model)
             torch.save(state_dict, checkpoint_path + "_pytorch_model.pt")
 
+            trainer_state = {
+                "completed_steps": self.completed_steps,
+                "batches_seen": self.batches_seen,
+                "vla_epoch_count": self.vla_epoch_count,
+                "img_next_ema_updates": self._img_next_ema_updates,
+            }
+            Path(state_path, "trainer_state.json").write_text(
+                json.dumps(trainer_state, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
             # save training metadata
             summary_data = {
                 "steps": self.completed_steps,
+                "training_state": state_path,
             }
             with open(os.path.join(self.config.output_dir, "summary.jsonl"), "a") as f:
                 f.write(json.dumps(summary_data) + "\n")
-            self.accelerator.print(f"✅ Checkpoint saved at {checkpoint_path}")
+            self.accelerator.print(
+                f"✅ Model checkpoint saved at {checkpoint_path}_pytorch_model.pt"
+            )
+            self.accelerator.print(f"✅ Training state saved at {state_path}")
         self.accelerator.wait_for_everyone()
 
     def _log_metrics(self, metrics):
@@ -373,7 +441,17 @@ class LaRA_VLA_Trainer(TrainerUtils):
 
     def _create_data_iterators(self):
         """create data iterators"""
-        self.vla_iter = iter(self.vla_train_dataloader)
+        if self._resume_batches_to_skip:
+            resumed_dataloader = skip_first_batches(
+                self.vla_train_dataloader, self._resume_batches_to_skip
+            )
+            self.vla_iter = iter(resumed_dataloader)
+            self.accelerator.print(
+                f"Skipping {self._resume_batches_to_skip} already consumed batches"
+            )
+            self._resume_batches_to_skip = 0
+        else:
+            self.vla_iter = iter(self.vla_train_dataloader)
         # self.vlm_iter = iter(self.vlm_train_dataloader)
 
     def _get_next_batch(self):
@@ -381,12 +459,12 @@ class LaRA_VLA_Trainer(TrainerUtils):
         try:
             batch_vla = next(self.vla_iter)
         except StopIteration:
-            if not hasattr(self, "vla_epoch_count"):
-                self.vla_epoch_count = 0
             self.vla_iter, self.vla_epoch_count = TrainerUtils._reset_dataloader(
                 self.vla_train_dataloader, self.vla_epoch_count
             )
             batch_vla = next(self.vla_iter)
+
+        self.batches_seen += 1
 
         return batch_vla
 
@@ -400,7 +478,9 @@ class LaRA_VLA_Trainer(TrainerUtils):
 
         # create progress bar
         progress_bar = tqdm(
-            range(self.config.trainer.max_train_steps), disable=not self.accelerator.is_local_main_process
+            total=self.config.trainer.max_train_steps,
+            initial=self.completed_steps,
+            disable=not self.accelerator.is_local_main_process,
         )
 
         # main training loop
@@ -429,19 +509,24 @@ class LaRA_VLA_Trainer(TrainerUtils):
                     )
 
             # # evaluate model
-            if self.completed_steps % self.config.trainer.eval_interval == 0:
+            if (
+                self.accelerator.sync_gradients
+                and self.completed_steps % self.config.trainer.eval_interval == 0
+            ):
                 step_metrics = self.eval_action_model(step_metrics)
 
             # record metrics
             step_metrics["data_time"] = t_end_data - t_start_data
             step_metrics["model_time"] = t_end_model - t_start_model
-            self._log_metrics(step_metrics)
+            if self.accelerator.sync_gradients:
+                self._log_metrics(step_metrics)
 
             # save checkpoint
             if (
                 self.completed_steps % self.config.trainer.save_interval == 0
                 and self.completed_steps >= self.min_save_step
                 and self.completed_steps > 0
+                and self.accelerator.sync_gradients
             ):
                 self._save_checkpoint()
 
