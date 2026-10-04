@@ -402,6 +402,12 @@ cd "$REPO"
 bash scripts/reproduction/run_r2_official_eval.sh
 ```
 
+wrapper 默认把 `MUJOCO_EGL_DEVICE_ID` 设为 `CUDA_VISIBLE_DEVICES` 中的第一张
+物理 GPU，并在启动前验证它确实属于可见设备集合。robosuite 1.4.0 将该值
+解释为物理 GPU ID；如果可见设备为 `1,2,6,7`，固定写成 `0` 会使四个
+LIBERO client 在导入阶段同时失败。该映射只决定 EGL 渲染设备，不改变
+policy server 与 suite 的 GPU 分配或评估协议。
+
 wrapper 会强制 4 GPU、固定完整协议、关闭视频、每卡一个 policy server、
 启用 implicit latent reasoning、每 5 秒记录 GPU 状态，并保存 commit 和
 checkpoint SHA256。只有 2000 条结果全部存在才生成最终 JSON/CSV。

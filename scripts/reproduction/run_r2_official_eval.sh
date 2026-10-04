@@ -20,6 +20,22 @@ for executable in "${LARAVLA_PYTHON}" "${LIBERO_PYTHON}"; do
     exit 1
   fi
 done
+
+# robosuite 1.4.0 interprets MUJOCO_EGL_DEVICE_ID as a physical GPU ID and
+# requires it to be present in CUDA_VISIBLE_DEVICES.  Default to the first GPU
+# in the explicitly selected R2 pool instead of assuming physical GPU 0.
+export MUJOCO_EGL_DEVICE_ID="${MUJOCO_EGL_DEVICE_ID:-${gpu_ids[0]}}"
+egl_device_visible=false
+for gpu_id in "${gpu_ids[@]}"; do
+  if [[ "${gpu_id}" == "${MUJOCO_EGL_DEVICE_ID}" ]]; then
+    egl_device_visible=true
+    break
+  fi
+done
+if [[ "${egl_device_visible}" != "true" ]]; then
+  echo "MUJOCO_EGL_DEVICE_ID=${MUJOCO_EGL_DEVICE_ID} is not in CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}" >&2
+  exit 1
+fi
 if [[ ! -f "${LARA_CHECKPOINT}" ]]; then
   echo "Checkpoint does not exist: ${LARA_CHECKPOINT}" >&2
   exit 1
@@ -45,7 +61,6 @@ export HF_HOME="${R2_RUN_ROOT}/cache/huggingface"
 export LIBERO_CONFIG_PATH="${LIBERO_HOME}/libero"
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
-export MUJOCO_EGL_DEVICE_ID=0
 export NUMBA_CACHE_DIR="${R2_RUN_ROOT}/cache/numba"
 export MPLCONFIGDIR="${R2_RUN_ROOT}/cache/matplotlib"
 
@@ -55,6 +70,7 @@ libero_commit=$(git -C "${LIBERO_HOME}" rev-parse HEAD)
 checkpoint=${LARA_CHECKPOINT}
 checkpoint_sha256=$(sha256sum "${LARA_CHECKPOINT}" | cut -d' ' -f1)
 cuda_visible_devices=${CUDA_VISIBLE_DEVICES}
+mujoco_egl_device_id=${MUJOCO_EGL_DEVICE_ID}
 task_suites=libero_goal,libero_spatial,libero_object,libero_10
 rollouts_per_task=50
 save_videos=false

@@ -12,6 +12,12 @@
 当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
 [R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
 
+R2 服务器首次并行启动时发现，robosuite 1.4.0 要求
+`MUJOCO_EGL_DEVICE_ID` 是 `CUDA_VISIBLE_DEVICES` 中的物理 GPU ID。旧 wrapper
+固定使用 GPU 0；当实际 GPU 池为 `1,2,6,7` 时，四个 client 会在导入阶段
+触发断言。复现 wrapper 现默认选择可见 GPU 池中的第一张，并在启动前验证
+映射；模型、checkpoint、任务和 rollout 协议均未改变。
+
 - Fork：<https://github.com/husterPWC/LaRA-VLA>
 - Upstream：<https://github.com/LoveJu1y/LaRA-VLA.git>
 - 初始 fork/origin/main/upstream/main：`93b5c03c691e38a3c9e90878e76557009e2df261`
