@@ -408,12 +408,16 @@ class LaRA_VLA_Trainer(TrainerUtils):
         )
         state_path = checkpoint_path + "_training_state"
 
-        # DeepSpeed state saving is collective and must run on every rank.
-        self.accelerator.save_state(
-            output_dir=state_path,
-            safe_serialization=False,
+        save_training_state = bool(
+            self.config.trainer.get("save_training_state", True)
         )
-        self.accelerator.wait_for_everyone()
+        if save_training_state:
+            # DeepSpeed state saving is collective and must run on every rank.
+            self.accelerator.save_state(
+                output_dir=state_path,
+                safe_serialization=False,
+            )
+            self.accelerator.wait_for_everyone()
 
         if self.accelerator.is_main_process:
             # save model state
@@ -428,22 +432,24 @@ class LaRA_VLA_Trainer(TrainerUtils):
                 "observed_loss_counts": self._observed_loss_counts,
                 "finite_nonzero_grad_steps": self._finite_nonzero_grad_steps,
             }
-            Path(state_path, "trainer_state.json").write_text(
-                json.dumps(trainer_state, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            if save_training_state:
+                Path(state_path, "trainer_state.json").write_text(
+                    json.dumps(trainer_state, indent=2) + "\n",
+                    encoding="utf-8",
+                )
 
             # save training metadata
             summary_data = {
                 "steps": self.completed_steps,
-                "training_state": state_path,
+                "training_state": state_path if save_training_state else None,
             }
             with open(os.path.join(self.config.output_dir, "summary.jsonl"), "a") as f:
                 f.write(json.dumps(summary_data) + "\n")
             self.accelerator.print(
                 f"✅ Model checkpoint saved at {checkpoint_path}_pytorch_model.pt"
             )
-            self.accelerator.print(f"✅ Training state saved at {state_path}")
+            if save_training_state:
+                self.accelerator.print(f"✅ Training state saved at {state_path}")
         self.accelerator.wait_for_everyone()
 
     def _log_metrics(self, metrics):
@@ -776,7 +782,10 @@ class LaRA_VLA_Trainer(TrainerUtils):
             )
 
         # save final model
-        if self.accelerator.is_main_process:
+        if (
+            self.accelerator.is_main_process
+            and self.config.trainer.get("save_final_model", True)
+        ):
             final_checkpoint = os.path.join(self.config.output_dir, "final_model")
             os.makedirs(final_checkpoint, exist_ok=True)
             state_dict = self.accelerator.get_state_dict(self.model)

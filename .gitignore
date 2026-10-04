@@ -242,6 +242,7 @@ checkpoints/
 wandb/
 hf_cache/
 logs/
+runs/
 *.pt
 *.pth
 *.safetensors

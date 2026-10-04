@@ -372,6 +372,35 @@ Stage II checkpoint 加载 `qwen_vl_interface`，连续 action head 需要重新
 记录 per-device batch 14。R4 默认遵循论文的 16，并将这项差异保留在最终结果
 元数据中，不把二者静默混用。
 
+### R3 单卡正式 smoke 驱动
+
+`scripts/reproduction/smoke_train_r3.sh` 只调用正式
+`laravla/training/train.py`，不包含替代模型、假数据或另一套 forward。默认使用：
+
+- GPU 0；
+- 正式 `libero_all` LeRobot 数据；
+- 本地 Qwen3-VL 4B backbone；
+- 固定 revision 的官方 FAST tokenizer；
+- batch 1、num_workers 0、bf16、ZeRO-2 CPU optimizer offload；
+- 每个阶段 2 个 optimizer steps；
+- image-next teacher 在 Stage I/II 开启，在 Stage III 关闭；
+- W&B disabled，但完整写入本地 log、metrics 和 validation JSON。
+
+按以下顺序逐项执行和验收：
+
+```bash
+bash scripts/reproduction/smoke_train_r3.sh stage1
+bash scripts/reproduction/smoke_train_r3.sh resume-stage1
+bash scripts/reproduction/smoke_train_r3.sh stage2-1
+bash scripts/reproduction/smoke_train_r3.sh stage2-2
+bash scripts/reproduction/smoke_train_r3.sh stage2-3
+bash scripts/reproduction/smoke_train_r3.sh stage3
+```
+
+Stage I 首次运行保存完整 training state；第二条命令必须从 step 2 恢复并完成
+step 3。后续阶段保存正式 `.pt` 供链式加载，但关闭重复 training-state 和
+final-model 副本，以控制 3090 主机磁盘使用。正式 R4 默认配置仍保存完整状态。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
