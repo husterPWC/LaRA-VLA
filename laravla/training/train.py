@@ -264,6 +264,13 @@ class LaRA_VLA_Trainer(TrainerUtils):
         self.total_batch_size = self._calculate_total_batch_size()
         self.min_save_step = getattr(self.config.trainer, "min_save_step", 0)
         self._img_next_ema_updates = 0
+        self._observed_loss_counts = {
+            "action_loss": 0,
+            "vlm_loss": 0,
+            "img_next_loss": 0,
+        }
+        self._finite_nonzero_grad_steps = 0
+        self.parameter_counts = {}
 
     def prepare_training(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -292,7 +299,14 @@ class LaRA_VLA_Trainer(TrainerUtils):
         self.model = self.freeze_backbones(self.model, freeze_modules=freeze_modules)
 
         #  print model trainable parameters:
-        self.print_trainable_parameters(self.model)
+        parameter_counts = self.print_trainable_parameters(self.model)
+        if parameter_counts is not None:
+            total, trainable = parameter_counts
+            self.parameter_counts = {
+                "total": total,
+                "trainable": trainable,
+                "frozen": total - trainable,
+            }
 
         # initialize distributed training components
         (
@@ -368,6 +382,12 @@ class LaRA_VLA_Trainer(TrainerUtils):
         self._img_next_ema_updates = int(
             metadata.get("img_next_ema_updates", 0)
         )
+        self._observed_loss_counts = metadata.get(
+            "observed_loss_counts", self._observed_loss_counts
+        )
+        self._finite_nonzero_grad_steps = int(
+            metadata.get("finite_nonzero_grad_steps", 0)
+        )
         self._resume_batches_to_skip = self.batches_seen % len(
             self.vla_train_dataloader
         )
@@ -405,6 +425,8 @@ class LaRA_VLA_Trainer(TrainerUtils):
                 "batches_seen": self.batches_seen,
                 "vla_epoch_count": self.vla_epoch_count,
                 "img_next_ema_updates": self._img_next_ema_updates,
+                "observed_loss_counts": self._observed_loss_counts,
+                "finite_nonzero_grad_steps": self._finite_nonzero_grad_steps,
             }
             Path(state_path, "trainer_state.json").write_text(
                 json.dumps(trainer_state, indent=2) + "\n",
@@ -428,14 +450,38 @@ class LaRA_VLA_Trainer(TrainerUtils):
         """record training metrics"""
         if self.completed_steps % self.config.trainer.logging_frequency == 0:
             if dist.get_rank() == 0:
-                # add learning rate
-                metrics["learning_rate"] = self.lr_scheduler.get_last_lr()[0]
+                # add learning rates for every optimizer parameter group
+                learning_rates = self.lr_scheduler.get_last_lr()
+                metrics["learning_rate"] = learning_rates[0]
+                for index, group in enumerate(self.optimizer.param_groups):
+                    group_name = group.get("name", f"group_{index}")
+                    metrics[f"learning_rate/{group_name}"] = learning_rates[index]
 
                 # add epoch info
                 metrics["epoch"] = round(self.completed_steps / len(self.vla_train_dataloader), 2)
 
+                if torch.cuda.is_available():
+                    metrics["gpu_memory/allocated_gib"] = (
+                        torch.cuda.memory_allocated() / 1024**3
+                    )
+                    metrics["gpu_memory/reserved_gib"] = (
+                        torch.cuda.memory_reserved() / 1024**3
+                    )
+                    metrics["gpu_memory/peak_allocated_gib"] = (
+                        torch.cuda.max_memory_allocated() / 1024**3
+                    )
+
                 # record to W&B
                 wandb.log(metrics, step=self.completed_steps)
+                metrics_path = Path(self.config.output_dir) / "metrics.jsonl"
+                with metrics_path.open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(
+                            {"step": self.completed_steps, **metrics},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
                 # debug output
                 logger.info(f"Step {self.completed_steps}, Loss: {metrics})")
 
@@ -607,19 +653,55 @@ class LaRA_VLA_Trainer(TrainerUtils):
                 else:
                     total_loss = output_dict["action_loss"]
 
+            for loss_name in (
+                "action_loss",
+                "vlm_loss",
+                "img_next_loss",
+                "total_loss",
+            ):
+                loss = total_loss if loss_name == "total_loss" else output_dict.get(loss_name)
+                if loss is not None and not torch.isfinite(loss.detach()).all():
+                    raise FloatingPointError(
+                        f"{loss_name} contains NaN/Inf at step {self.completed_steps}"
+                    )
+
             # VLA backward propagation
             self.accelerator.backward(total_loss)
 
             # gradient clipping
-            if self.config.trainer.gradient_clipping is not None:
-                self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.trainer.gradient_clipping)
+            grad_norm_value = None
+            if (
+                self.accelerator.sync_gradients
+                and self.config.trainer.gradient_clipping is not None
+            ):
+                grad_norm = self.accelerator.clip_grad_norm_(
+                    self.model.parameters(), self.config.trainer.gradient_clipping
+                )
+                if grad_norm is not None:
+                    grad_norm_value = float(grad_norm.detach().float().item())
 
             # optimizer step
             self.optimizer.step()
+            if (
+                self.accelerator.sync_gradients
+                and grad_norm_value is None
+                and callable(getattr(self.model, "get_global_grad_norm", None))
+            ):
+                deepspeed_grad_norm = self.model.get_global_grad_norm()
+                if deepspeed_grad_norm is not None:
+                    grad_norm_value = float(deepspeed_grad_norm)
             self.lr_scheduler.step()
             # AcceleratedOptimizer only clears gradients on synchronized update
             # steps, preserving gradients across accumulation micro-batches.
             self.optimizer.zero_grad()
+
+            if self.accelerator.sync_gradients and grad_norm_value is not None:
+                if not np.isfinite(grad_norm_value):
+                    raise FloatingPointError(
+                        f"grad_norm contains NaN/Inf at step {self.completed_steps}"
+                    )
+                if grad_norm_value > 0:
+                    self._finite_nonzero_grad_steps += 1
 
             # EMA update for img_next target vision encoder (if enabled)
             if self.accelerator.sync_gradients:
@@ -638,22 +720,61 @@ class LaRA_VLA_Trainer(TrainerUtils):
 
         # Build metrics dictionary
         metrics = {}
-        
-        # Add action_loss if available (not present in reasoning_only mode)
-        if "action_loss" in output_dict and output_dict["action_loss"] is not None:
-            metrics["action_loss"] = output_dict["action_loss"].item()
-        
-        # Add vlm_loss if available and computed
-        if "vlm_loss" in output_dict and output_dict["vlm_loss"] is not None:
-            metrics["vlm_loss"] = output_dict["vlm_loss"].item()
+        for loss_name in ("action_loss", "vlm_loss", "img_next_loss"):
+            loss = output_dict.get(loss_name)
+            if loss is not None:
+                metrics[loss_name] = loss.detach().float().item()
+                self._observed_loss_counts[loss_name] += 1
         
         # Add total_loss for monitoring (ensures consistency with backward pass)
-        metrics["total_loss"] = total_loss.item()
+        metrics["total_loss"] = total_loss.detach().float().item()
+        if grad_norm_value is not None:
+            metrics["grad_norm"] = grad_norm_value
         
         return metrics
 
     def _finalize_training(self):
         """training end processing"""
+        training_stage = self.config.framework.training_stage
+        required_losses = (
+            ("vlm_loss",)
+            if training_stage == "reasoning_only"
+            else ("action_loss",)
+        )
+        img_next_cfg = self.config.framework.get("img_next", {})
+        if (
+            training_stage in ("reasoning_only", "full")
+            and img_next_cfg.get("enable", False)
+            and img_next_cfg.get("use_teacher", True)
+            and img_next_cfg.get("loss_weight", 0) > 0
+        ):
+            required_losses += ("img_next_loss",)
+
+        missing_losses = [
+            name
+            for name in required_losses
+            if self._observed_loss_counts.get(name, 0) == 0
+        ]
+        if missing_losses:
+            raise RuntimeError(
+                f"Training finished without required losses: {missing_losses}; "
+                f"observed={self._observed_loss_counts}"
+            )
+        if self._finite_nonzero_grad_steps == 0:
+            raise RuntimeError("Training finished without a finite non-zero gradient step")
+
+        if self.accelerator.is_main_process:
+            validation = {
+                "completed_steps": self.completed_steps,
+                "observed_loss_counts": self._observed_loss_counts,
+                "finite_nonzero_grad_steps": self._finite_nonzero_grad_steps,
+                "parameter_counts": self.parameter_counts,
+            }
+            Path(self.config.output_dir, "training_validation.json").write_text(
+                json.dumps(validation, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
         # save final model
         if self.accelerator.is_main_process:
             final_checkpoint = os.path.join(self.config.output_dir, "final_model")

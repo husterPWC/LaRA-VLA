@@ -315,6 +315,27 @@ Accelerate/DeepSpeed。训练步又在每次 micro-batch forward 前调用
 只在真正完成 optimizer update 的同步步执行。LeRobot mixture 的 epoch 也会在
 dataloader 重建时递增，避免跨 epoch 重复同一批 `(epoch, index, seed)` 样本。
 
+### R3 训练验收指标
+
+官方 trainer 原来只记录 `action_loss`、`vlm_loss` 和 `total_loss`，没有记录
+`img_next_loss`、梯度范数和显存；image-next 内部异常又会被 warning 后跳过。
+这会使 Stage I/II 在缺失论文视觉预测监督时仍可能正常退出。
+
+现在每个 logging step 额外写入 `metrics.jsonl`：
+
+- 当前阶段实际返回的 `action_loss`、`vlm_loss`、`img_next_loss`；
+- `total_loss`；
+- optimizer update 前的全局 `grad_norm`；
+- 每个 optimizer parameter group 的 learning rate；
+- CUDA allocated、reserved 和 peak allocated memory。
+
+所有出现的 loss 和 grad norm 都做 NaN/Inf 检查。训练结束时根据
+`training_stage` 检查 VLM 或 action loss；当 image-next teacher 与 loss weight
+启用时，还要求运行中至少实际出现一次 `img_next_loss`。此外至少需要一次有限
+非零梯度更新。`training_validation.json` 保存 loss 观测次数、非零梯度步数及
+total/trainable/frozen 参数量。该检查只验证官方 forward 的真实输出，不增加
+或替换 loss。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
