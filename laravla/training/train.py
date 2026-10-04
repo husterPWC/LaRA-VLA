@@ -40,10 +40,6 @@ from laravla.training.trainer_utils.trainer_tools import build_param_lr_groups
 from laravla.training.trainer_utils.cot_mode_utils import get_implicit_flags
 
 
-deepspeed_plugin = DeepSpeedPlugin()
-accelerator = Accelerator(deepspeed_plugin=deepspeed_plugin)
-accelerator.print(accelerator.state)
-
 # Sane Defaults
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -52,6 +48,37 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from accelerate.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def build_accelerator(cfg) -> Accelerator:
+    """Build Accelerate/DeepSpeed after the training config is available."""
+    gradient_accumulation_steps = int(
+        cfg.trainer.get("gradient_accumulation_steps", 1)
+    )
+    gradient_clipping = cfg.trainer.get("gradient_clipping", None)
+    deepspeed_plugin = DeepSpeedPlugin(
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_clipping=gradient_clipping,
+        zero_stage=int(cfg.trainer.get("deepspeed_zero_stage", 2)),
+        offload_optimizer_device=cfg.trainer.get(
+            "deepspeed_offload_optimizer_device", "none"
+        ),
+        offload_param_device=cfg.trainer.get(
+            "deepspeed_offload_param_device", "none"
+        ),
+    )
+    mixed_precision = (
+        "bf16"
+        if cfg.trainer.get("enable_mixed_precision_training", True)
+        else "no"
+    )
+    accelerator = Accelerator(
+        deepspeed_plugin=deepspeed_plugin,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        mixed_precision=mixed_precision,
+    )
+    accelerator.print(accelerator.state)
+    return accelerator
 
 
 def setup_directories(cfg) -> Path:
@@ -313,7 +340,7 @@ class LaRA_VLA_Trainer(TrainerUtils):
     def _save_checkpoint(self):
         """save current training state"""
 
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
 
             checkpoint_path = os.path.join(self.checkpoint_dir, f"steps_{self.completed_steps}")
             # save model state
@@ -327,7 +354,7 @@ class LaRA_VLA_Trainer(TrainerUtils):
             with open(os.path.join(self.config.output_dir, "summary.jsonl"), "a") as f:
                 f.write(json.dumps(summary_data) + "\n")
             self.accelerator.print(f"✅ Checkpoint saved at {checkpoint_path}")
-        accelerator.wait_for_everyone()
+        self.accelerator.wait_for_everyone()
 
     def _log_metrics(self, metrics):
         """record training metrics"""
@@ -484,8 +511,6 @@ class LaRA_VLA_Trainer(TrainerUtils):
     def _train_step(self, batch_vla, batch_vlm=None):
         """execute single training step"""
         with self.accelerator.accumulate(self.model):
-            self.optimizer.zero_grad()
-
             # VLA task forward propagation
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 output_dict = self.model.forward(batch_vla)
@@ -507,6 +532,9 @@ class LaRA_VLA_Trainer(TrainerUtils):
             # optimizer step
             self.optimizer.step()
             self.lr_scheduler.step()
+            # AcceleratedOptimizer only clears gradients on synchronized update
+            # steps, preserving gradients across accumulation micro-batches.
+            self.optimizer.zero_grad()
 
             # EMA update for img_next target vision encoder (if enabled)
             if self.accelerator.sync_gradients:
@@ -558,6 +586,8 @@ class LaRA_VLA_Trainer(TrainerUtils):
 
 def main(cfg) -> None:
     logger.info("ECoT VLA Training :: Warming Up")
+
+    accelerator = build_accelerator(cfg)
 
     mode_flags = get_implicit_flags()
 

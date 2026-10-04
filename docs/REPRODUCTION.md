@@ -267,6 +267,28 @@ bbox、FAST action tokens 和 16 个 `<img_next>`；Stage 1/2/3/4 的
 `results/r3_training_data_stage1.json` 至
 `results/r3_training_data_stage4.json`。
 
+### R3 训练配置生效修复
+
+官方 `train.py` 在读取 YAML/CLI 前便以默认参数创建 `Accelerator`，因此
+`trainer.gradient_accumulation_steps` 和混合精度配置没有传给
+Accelerate/DeepSpeed。训练步又在每次 micro-batch forward 前调用
+`optimizer.zero_grad()`；在同步更新的 micro-batch 上，这会清掉此前累积的
+梯度。两者共同导致配置中的 gradient accumulation 实际不成立。
+
+最小修复如下：
+
+- 在配置完成合并后创建 `Accelerator` 和 `DeepSpeedPlugin`；
+- 明确传入 gradient accumulation、bf16、ZeRO stage 和 offload 配置；
+- 将 `zero_grad()` 移到 optimizer step 后，由 AcceleratedOptimizer 仅在同步
+  更新步清梯度；
+- 将 dataloader 的 `num_workers` 改为配置项，默认仍为官方的 4；
+- 默认仍为 ZeRO-2、无 offload；R3 单卡 smoke 才显式覆盖为 CPU optimizer
+  offload。
+
+独立配置探针已验证：accumulation=3、bf16、ZeRO-2、CPU optimizer offload
+均进入最终 DeepSpeed 配置。该修复只使已有工程配置真正生效，不改变模型、
+数据、loss 或 forward。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、

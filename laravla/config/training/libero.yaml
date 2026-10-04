@@ -19,6 +19,7 @@ datasets:
     data_root_dir: "./data/libero_lerobot"
     data_mix: "libero_all"
     per_device_batch_size: 8
+    num_workers: 4
     image_size: [224, 224]
     delete_pause_frame: true
     obs: ["image_0"]
@@ -128,3 +129,6 @@ trainer:
   freeze_modules: ""
   enable_gradient_checkpointing: false
   enable_mixed_precision_training: true
+  deepspeed_zero_stage: 2
+  deepspeed_offload_optimizer_device: "none"
+  deepspeed_offload_param_device: "none"
