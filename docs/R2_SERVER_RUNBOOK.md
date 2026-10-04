@@ -33,7 +33,7 @@ cd "$HOME/lara-r2-bootstrap"
   hostname
   uname -a
   nvidia-smi
-  nvidia-smi --query-gpu=index,name,compute_cap,memory.total,memory.used,driver_version --format=csv
+  nvidia-smi --query-gpu=index,name,memory.total,memory.used,driver_version --format=csv
   command -v nvcc && nvcc --version || true
   df -h
   free -h
@@ -41,16 +41,27 @@ cd "$HOME/lara-r2-bootstrap"
 } | tee server-hardware.txt
 ```
 
+本机审计结果（2026-10-04）：8 张 NVIDIA RTX 5880 Ada，每张约 48 GiB；
+Driver 595.91.07；总内存 377 GiB、可用约 351 GiB；CUDA 12.4 toolkit
+位于 `/data/peixingxing/cuda_12.4`；Conda 位于
+`/data/peixingxing/miniconda3`。GPU 4 当时被 Isaac Sim 占用，GPU 0–3
+空闲，因此第一次正式评估使用 0–3。`/data` 使用率为 95%，新代码和结果
+继续放在 `~/codevla/LaRA` 所在的根分区，不向旧评估目录写入新数据。
+
 当前已验证的软件组合是 PyTorch 2.6.0+cu124，所以编译 PyTorch3D 时需要
 驱动支持 CUDA 12.4、本机有 CUDA 12.4 toolkit、选中 GPU 至少约 12 GiB
 可用显存，并且主机内存足以让四个 server 同时加载 10.3 GB checkpoint。
+当前服务器满足这些条件。Driver 显示 CUDA 13.2 只表示向下兼容能力，
+实际用于编译扩展的 `nvcc` 仍是 12.4.99。
+这版 `nvidia-smi` 不支持 `compute_cap` 查询字段，所以审计命令不再查询
+该字段；第 4 节会用 `torch.cuda.get_device_capability()` 获取真实计算能力。
 
 `nvidia-smi` 顶部显示的是驱动支持的最高 CUDA 版本，不等于 `nvcc` 版本。
 如果下面检查不是 `12.4`，先停止并把 `server-hardware.txt` 发回来，不要
 自行替换 PyTorch 或 CUDA 版本。
 
 ```bash
-export CUDA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"
+export CUDA_HOME="/data/peixingxing/cuda_12.4"
 export NVCC_VERSION="$($CUDA_HOME/bin/nvcc --version | sed -n 's/.*release \([0-9.]*\),.*/\1/p')"
 echo "CUDA_HOME=$CUDA_HOME"
 echo "NVCC_VERSION=$NVCC_VERSION"
