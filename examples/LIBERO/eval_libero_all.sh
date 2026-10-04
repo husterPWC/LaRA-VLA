@@ -153,7 +153,7 @@ trap cleanup EXIT
 wait_port_ready() {
   local port="$1"
   echo "⏳ Waiting for server to become ready: 127.0.0.1:${port}"
-  "${LARAVLA_PYTHON}" - <<PY
+  "${LARAVLA_PYTHON}" - "${port}" <<'PY'
 import os
 import sys
 import time
@@ -169,7 +169,7 @@ except Exception as e:
     raise
 
 host="127.0.0.1"
-port=int("${port}")
+port=int(sys.argv[1])
 timeout_s=180
 start=time.time()
 

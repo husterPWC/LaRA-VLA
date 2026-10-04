@@ -408,6 +408,11 @@ wrapper 默认把 `MUJOCO_EGL_DEVICE_ID` 设为 `CUDA_VISIBLE_DEVICES` 中的第
 LIBERO client 在导入阶段同时失败。该映射只决定 EGL 渲染设备，不改变
 policy server 与 suite 的 GPU 分配或评估协议。
 
+端口就绪检查使用加引号的 Python heredoc，并通过 `sys.argv` 接收端口。
+旧脚本的未加引号 heredoc 会执行帮助文本反引号中的 Pip 示例命令，并在
+仓库根目录生成名为 `=11` 的文件；这与评估无关，但会污染工作树和调用方
+当前环境。修复只影响 readiness probe 的 Shell 解析，不改变连接检查逻辑。
+
 wrapper 会强制 4 GPU、固定完整协议、关闭视频、每卡一个 policy server、
 启用 implicit latent reasoning、每 5 秒记录 GPU 状态，并保存 commit 和
 checkpoint SHA256。只有 2000 条结果全部存在才生成最终 JSON/CSV。

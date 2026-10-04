@@ -18,6 +18,11 @@ R2 服务器首次并行启动时发现，robosuite 1.4.0 要求
 触发断言。复现 wrapper 现默认选择可见 GPU 池中的第一张，并在启动前验证
 映射；模型、checkpoint、任务和 rollout 协议均未改变。
 
+同一次启动还暴露了官方并行脚本 readiness probe 的 Shell 问题：Python
+代码使用未加引号的 heredoc，错误提示中的反引号 Pip 示例会在 Shell 展开
+heredoc 时被执行，并把输出重定向到仓库根目录的 `=11`。现将 heredoc 引号
+固定，并通过 `sys.argv` 传入端口，防止任何命令替换；端口探测语义不变。
+
 - Fork：<https://github.com/husterPWC/LaRA-VLA>
 - Upstream：<https://github.com/LoveJu1y/LaRA-VLA.git>
 - 初始 fork/origin/main/upstream/main：`93b5c03c691e38a3c9e90878e76557009e2df261`
