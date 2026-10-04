@@ -345,6 +345,33 @@ Stage II checkpoint 加载 `qwen_vl_interface`，连续 action head 需要重新
 `cfg.seed + process_index` 设置随机种子。训练准备阶段仍会用同一规则再次设置，
 不改变后续数据和训练随机流的约定。
 
+### 论文训练配方与官方 launcher 的修复
+
+论文 Table 6 与公开脚本逐项比较后，原 launcher 存在会改变训练目标的差异：
+
+- `run_libero_multistage.sh` 把 `IMG_NEXT_USE_TEACHER` 设为 `false`；当前
+  forward 在该值为 false 时完全不计算 `img_next_loss`，所以不是一种等价的
+  teacher 实现；
+- 论文 Stage II 的三个 2k 子阶段均为 image-next weight 0.2、batch 16，原脚本
+  第一个子阶段仍为 0.1，前两个子阶段仍为 batch 12；
+- `run_laravla_libero.sh` 没有 Stage II checkpoint，使用 60k、batch 8，且沿用
+  action tokens 和 VLM weight 1，不能实现论文 Stage III 的连续 action/flow
+  matching 目标。
+
+最小修复后：
+
+- 代码 stage 1（论文 Stage I）：5k、batch 12、image-next 0.1、teacher 开启；
+- 代码 stage 2/3/4（论文 Stage II）：各 2k、batch 16、image-next 0.2、teacher
+  开启，并依次替换 Subtask/BBox/Reasoning；
+- 论文 Stage III：必须传入 Stage II 最终 checkpoint，只加载
+  `qwen_vl_interface`，关闭离散 action tokens，VLM loss weight 为 0，执行
+  40k continuous action/flow matching；默认 8 进程，单卡 R3 可通过环境变量
+  `NUM_GPUS=1` 覆盖。
+
+论文 Table 6 的 Stage III batch 为 16；官方发布 checkpoint 的 run config
+记录 per-device batch 14。R4 默认遵循论文的 16，并将这项差异保留在最终结果
+元数据中，不把二者静默混用。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
