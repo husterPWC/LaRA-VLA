@@ -1,69 +1,64 @@
-# LaRA-VLA official reproduction
+# LaRA-VLA 官方复现记录
 
-## Scope and baseline
+## 范围与基线
 
-Rebuilt on 2026-10-03 after the old checkout and environments were removed.
-R0 is environment validation; R1 is an actual released-checkpoint rollout.
-R2 is official 2,000-rollout evaluation on the server. R3/R4 training remains
-blocked until checkpoint evaluation is validated. No Spatial-LaRA changes.
-The from-scratch server procedure is maintained in
-[`R2_SERVER_RUNBOOK.md`](R2_SERVER_RUNBOOK.md).
+2026-10-03 删除旧 checkout 和旧环境后，从零重建。当前阶段定义如下：
 
-- Fork: https://github.com/husterPWC/LaRA-VLA
-- Upstream: https://github.com/LoveJu1y/LaRA-VLA.git
-- Initial fork, origin/main and upstream/main: `93b5c03c691e38a3c9e90878e76557009e2df261`
-- LIBERO: https://github.com/Lifelong-Robot-Learning/LIBERO.git
-- LIBERO commit: `8f1084e3132a39270c3a13ebe37270a43ece2a01`
-- Initial tracked worktrees were clean. No merge, rebase or reset was performed.
-- Ubuntu 22.04.5; two RTX 3090 24 GiB GPUs; R0/R1 use GPU 0 only.
-- Driver 570.144; system CUDA toolkit 12.4 (nvcc V12.4.99).
-  The 12.8 label in nvidia-smi is driver capability, not the torch runtime.
+- R0：代码、依赖、CUDA、LIBERO 和 EGL 环境验收；
+- R1：使用作者发布 checkpoint 完成真实单卡 LIBERO rollout；
+- R2：在服务器上执行官方 4 suite、2000 rollout 正式评估；
+- R3/R4：只有 R2 评估链路一致后才开始训练验证和完整训练。
 
-## Environment decisions
+当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
+[R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
 
-Two newly created Conda environments: `lara-vla` and `libero`, Python 3.10.
-This follows LaRA's LIBERO README recommendation to separate client/server.
-Unrelated Conda environments were not changed.
+- Fork：<https://github.com/husterPWC/LaRA-VLA>
+- Upstream：<https://github.com/LoveJu1y/LaRA-VLA.git>
+- 初始 fork/origin/main/upstream/main：`93b5c03c691e38a3c9e90878e76557009e2df261`
+- LIBERO：<https://github.com/Lifelong-Robot-Learning/LIBERO.git>
+- LIBERO commit：`8f1084e3132a39270c3a13ebe37270a43ece2a01`
+- 初始 tracked worktree 干净，没有执行 merge、rebase 或 reset。
+- 主机：Ubuntu 22.04.5，两张 RTX 3090 24 GiB；R0/R1 只使用 GPU 0。
+- Driver 570.144；系统 CUDA toolkit 12.4（nvcc V12.4.99）。
+- `nvidia-smi` 中的 CUDA 12.8 是驱动能力，不是 torch runtime。
 
-- Server: torch 2.6.0+cu124 / torchvision 0.21.0+cu124, paired with the
-  upstream torchvision pin; transformers 4.57.0, accelerate 1.5.2,
-  DeepSpeed 0.16.9, NumPy 1.26.4 as upstream requires.
-- Client: torch 2.5.1+cpu / torchvision 0.20.1+cpu. The client has no neural
-  policy; GPU policy runs in the server. This explicit compatibility choice
-  preserves loading of LIBERO's trusted initial-state files without the
-  `weights_only=False` source patches needed with torch 2.6 defaults.
-  CPU torch does not prevent GPU EGL rendering.
-- Client NumPy 1.24.4 follows LaRA's evaluation README, overriding LIBERO's
-  original 1.22.4 pin. Other original LIBERO direct pins are preserved.
-- MuJoCo 2.3.7 is an explicit reproduction choice with robosuite 1.4.0,
-  not a claim that the paper specified this exact patch version.
-- Client supplemental packages are recorded in `environment/libero-requirements.txt`.
-  Numba 0.60.0 is pinned for the NumPy 1.24 stack. Setuptools 75.8.0 retains
-  legacy packaging APIs used by the older robotics dependencies.
-- No model, loss, curriculum, evaluation action semantics, or LIBERO benchmark
-  source has been changed by this rebuild.
+## 环境设计
 
-## Local resources and paths
+使用两个新建 Conda 环境，均为 Python 3.10：
 
-Workspace: `/home/robot/codePWC/LaRA`; code: `LaRA-VLA/`; simulator: `LIBERO/`.
-LaRA training data: `/data/CodePWC/lara_datasets/libero_lerobot_all`.
-Existing data and weights were retained; no dataset or model was downloaded.
+- `lara-vla`：policy server、模型加载、训练代码；
+- `libero`：MuJoCo/LIBERO client。
 
-```
-../StarVLA-Qwen3-VL-4B-Instruct-Action/
-../checkpoints/LaRA-VLA-libero/config.yaml
-../checkpoints/LaRA-VLA-libero/config.json
-../checkpoints/LaRA-VLA-libero/dataset_statistics.json
-../checkpoints/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt
+关键版本：
+
+- server：torch 2.6.0+cu124、torchvision 0.21.0+cu124、transformers
+  4.57.0、accelerate 1.5.2、DeepSpeed 0.16.9、NumPy 1.26.4；
+- client：torch 2.5.1+cpu、torchvision 0.20.1+cpu、NumPy 1.24.4、
+  MuJoCo 2.3.7、robosuite 1.4.0；
+- client 不运行神经网络 policy，CPU torch 不妨碍 EGL 使用 GPU 渲染；
+- 使用 torch 2.5.1 读取 LIBERO 可信 init-state 文件，可避免修改 benchmark
+  来适配 torch 2.6 的 `weights_only` 默认变化；
+- Numba 0.60.0 与 NumPy 1.24 配套；setuptools 75.8.0 保留旧依赖所需 API。
+
+这次重建没有改变模型、loss、curriculum、action 语义或 LIBERO benchmark。
+
+## 主机本地资源
+
+```text
+工作区：/home/robot/codePWC/LaRA
+代码：  /home/robot/codePWC/LaRA/LaRA-VLA
+LIBERO：/home/robot/codePWC/LaRA/LIBERO
+训练集：/data/CodePWC/lara_datasets/libero_lerobot_all
+backbone：../StarVLA-Qwen3-VL-4B-Instruct-Action
+官方运行目录：../checkpoints/LaRA-VLA-libero
+官方 checkpoint：../checkpoints/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt
 ```
 
-`environment/local-weights.sha256` identifies existing local weight bytes;
-it does not prove equality with a verified Hugging Face revision.
-Checkpoint remote revision is pending verification. Its filename says 25k,
-while accompanying configuration says max 40k and summary lists 16k–40k;
-do not infer provenance or final training step from either alone.
+`environment/local-weights.sha256` 记录本地权重字节哈希，但它本身不能证明
+对应哪个 Hugging Face revision。checkpoint 文件名显示 25k，配置写的是
+最大 40k，summary 又包含 16k–40k；不能仅凭文件名推断完整训练来源。
 
-Configure the simulator paths (JSON syntax is valid YAML):
+生成本机 LIBERO 配置：
 
 ```bash
 python scripts/reproduction/configure_libero.py \
@@ -71,16 +66,15 @@ python scripts/reproduction/configure_libero.py \
   --datasets /data/CodePWC/lara_datasets/clip-rt/modified_libero_hdf5
 ```
 
-This generates `../LIBERO/libero/config.yaml`, an untracked machine-local file.
-The `datasets` entry is the HDF5 root, not LaRA's LeRobot training root;
-R0 reset/render and R1 evaluation do not consume demonstration HDF5 files.
-Set `LIBERO_CONFIG_PATH=$LIBERO_HOME/libero` when running the official client.
+该命令生成未跟踪的 `../LIBERO/libero/config.yaml`。R0 reset/render 和 R1
+评估不读取 demonstration HDF5。运行 client 时设置：
 
-The previous fork's `LARAVLA_VLM_PATH` patch is absent from this clean fork.
-R1 must explicitly configure the existing backbone through the official
-`framework.qwenvl.base_vlm` mechanism; do not assume that old variable works.
-Do not overwrite released configuration without preserving its original and
-recording the path-only change. Prepare an isolated run view with:
+```bash
+export LIBERO_CONFIG_PATH="$LIBERO_HOME/libero"
+```
+
+旧 fork 中的 `LARAVLA_VLM_PATH` 补丁在干净 fork 中不存在。使用官方
+`framework.qwenvl.base_vlm` 配置机制创建隔离 checkpoint 视图：
 
 ```bash
 python scripts/reproduction/prepare_official_checkpoint.py \
@@ -89,37 +83,40 @@ python scripts/reproduction/prepare_official_checkpoint.py \
   --output-run ../checkpoints/repro_r1_official
 ```
 
-The generated manifest states that only `framework.qwenvl.base_vlm` changed;
-the active checkpoint is a hard link to the released bytes. A symbolic link is
-not valid here because the official loader resolves the checkpoint path before
-locating its sibling configuration, which would select the untouched source
-run configuration and its remote backbone name. The hard link avoids a second
-10.3 GB copy while keeping configuration lookup inside the isolated run view.
+生成的 manifest 会证明只修改 `framework.qwenvl.base_vlm`。checkpoint 使用
+硬链接而非符号链接：官方 loader 会先解析 checkpoint 路径再寻找相邻配置；
+符号链接会跳回原始目录并读到远端 backbone 名称。硬链接不会复制第二份
+10.3 GB 权重，同时能保证加载隔离目录中的配置。
 
-## R0 acceptance
+## R0 环境验收
 
 ```bash
 bash scripts/reproduction/env_check.sh
 ```
 
-The script checks both environments with pip check, imports the actual training
-entry, model, dataset loader and Qwen3 class, runs BF16 CUDA arithmetic, and
-loads the local processor. It then loads initial states for all 40 LIBERO tasks
-and resets/renders the real Goal task 0 using both 256x256 cameras through EGL.
-It does not replace a policy, perform a rollout, or instantiate a small model.
-R0 passing cannot be used as evidence of checkpoint loading or R1 success.
+该脚本执行：两个环境的 `pip check`、正式训练入口/模型/dataset loader/Qwen3
+导入、BF16 CUDA 计算、PyTorch3D native CUDA、真实 AV1 视频解码、全部
+40 个 LIBERO 任务 init states，以及 Goal task 0 的两路 256×256 EGL
+reset/render。它不会替换 policy、运行 rollout 或换成小模型。
 
-Status: **PASS on 2026-10-03**. Both pip checks, actual imports, GPU/native
-extension probes, real AV1 decode, all task initial states, and EGL rendering
-completed successfully. This closes environment R0 only.
+**R0 于 2026-10-03 通过。** R0 只能证明环境正常，不能替代 checkpoint
+加载或 R1 rollout。
 
-## R1 released-checkpoint inference smoke test
+## R1 官方 checkpoint 单卡 smoke test
 
-Status: **PASS on 2026-10-04** at LaRA commit
-`8fbb10816b8ecf62274771392d1d46af38b4ed23` and LIBERO commit
-`8f1084e3132a39270c3a13ebe37270a43ece2a01`.
+**R1 于 2026-10-04 通过。**
 
-First prepare the path-only local checkpoint view, then run the strict preflight:
+- LaRA commit：`8fbb10816b8ecf62274771392d1d46af38b4ed23`
+- LIBERO commit：`8f1084e3132a39270c3a13ebe37270a43ece2a01`
+- checkpoint state dict 严格匹配；missing/unexpected keys 都为空；
+- 没有触发 optional-module `strict=False` fallback；
+- 模型参数量 4.6045B；加载后 PyTorch 统计显存约 9.22 GB；
+- Qwen3-VL model/processor、真实 LIBERO Goal 视频帧预处理通过；
+- action/state 配置维度为 7，action horizon 为 8；
+- 正式 prompt 含 1 个 start、3 个 thinking、1 个 end 和 16 个
+  `<img_next>` token。
+
+checkpoint 严格预检命令：
 
 ```bash
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
@@ -131,147 +128,91 @@ PYTHONPATH="$PWD" \
   --output results/r1_checkpoint_preflight.json
 ```
 
-The preflight loads through the official `baseframework.from_pretrained` path.
-It found an exact state-dict match: no missing or unexpected keys and no
-strict=False compatibility fallback. It verified the Qwen3-VL model and
-processor, a real LIBERO Goal frame, action/state dimensions 7, action horizon
-8, and the `franka` normalization statistics. The formal inference prompt
-contains one start token, three thinking tokens, one end token, and 16
-`<img_next>` tokens. Loaded model memory was 9.22 GB by PyTorch accounting.
-
-Run the actual rollout in two terminals. Both commands call the official server
-and evaluator; the wrapper only fixes the recorded R1 paths and arguments.
-
-Terminal A:
+真实 rollout 使用两个终端：
 
 ```bash
-cd /home/robot/codePWC/LaRA/LaRA-VLA
+# 终端 A
 scripts/reproduction/smoke_inference.sh server \
   2>&1 | tee logs/repro_r1/server.log
 ```
 
-Terminal B, after the server reports `server listening`:
-
 ```bash
-cd /home/robot/codePWC/LaRA/LaRA-VLA
+# 终端 B，等待终端 A 打印 server listening
 scripts/reproduction/smoke_inference.sh client \
   2>&1 | tee logs/repro_r1/client_stdout.log
 ```
 
-The evaluated episode was `libero_goal`, task 0, seed 7, one rollout: “open
-the middle drawer of the cabinet.” It succeeded (1/1). The client exited 0 in
-15.72 seconds. The policy served 16 action chunks and logged four iterative
-latent-reasoning passes for every inference. A 200 ms external sample recorded
-9,767 MiB peak GPU-0 memory and 93% peak utilization; the model was restricted
-to the single RTX 3090 exposed as CUDA device 0. No policy fallback, shape
-failure, NaN/Inf, server error, or OOM occurred.
+实际执行 `libero_goal` task 0、seed 7、1 rollout，任务为 “open the middle
+drawer of the cabinet”，结果 1/1 成功。client exit 0，总耗时 15.72 秒。
+policy 执行 16 个 action chunks，每次都记录 4 个 iterative latent reasoning
+passes。200 ms 外部采样得到 GPU 0 峰值 9767 MiB、峰值利用率 93%，无
+fallback、shape error、NaN/Inf、server error 或 OOM。
 
-Both environment cameras were 256x256x3 uint8 and the unchanged client resized
-them to 224x224x3 before transmission. The returned normalized action tensor was
-1x8x7, matching the eight-step horizon and seven-dimensional action contract.
-The evaluator constructs a 1x8 robot-state array but does not include it in the
-server request; the checkpoint therefore runs with `state=None`. This is
-official repository behavior, recorded as an R2 consistency risk rather than
-silently changed during R1.
+两路环境图像为 256×256×3 uint8，client 发送前缩放到 224×224×3。返回
+normalized action shape 为 1×8×7。官方 evaluator 构造 1×8 robot state，
+但不把它发送给 server，因此 checkpoint 使用 `state=None`。这是官方行为，
+R1 不静默修改，作为 R2 一致性风险记录。
 
-Raw logs stay in ignored `logs/repro_r1/`. Reviewable evidence is committed as
-`results/r1_checkpoint_preflight.json` and
-`results/r1_official_checkpoint_smoke.json`. LIBERO emits a trusted-file
-`torch.load` future warning. After successful result logging, robosuite's EGL
-destructors report a repeated context-free warning; the client still exits 0.
-No source patch suppresses either warning.
+可审查证据：
 
-R1 required one evaluation-only source extension: optional `task_id` selects a
-single task, while its default `None` preserves the upstream all-task loop.
-The first checkpoint view used a symbolic link, exposing the official loader's
-path-resolution behavior described above. Commit `f44406e` changes only the
-reproduction preparation script to use a hard link. No model, loss, prompt,
-normalization, action post-processing, or environment semantics changed.
+- `results/r1_checkpoint_preflight.json`
+- `results/r1_official_checkpoint_smoke.json`
+- 原始日志位于被 Git 忽略的 `logs/repro_r1/`
 
-### Dependency packaging root causes (2026-10-03)
+LIBERO 会打印可信文件的 `torch.load` future warning。episode 成功写入后，
+robosuite EGL 析构器可能重复释放 context 并打印 warning，但 client 仍 exit 0。
+没有通过源码补丁隐藏这些 warning。
 
-The initial installation used the unmodified upstream requirements with the
-server constraints. pip 26.2.1 check found two real packaging defects:
+R1 对 evaluator 只增加可选 `task_id`；默认 `None` 保留官方遍历全部任务的
+行为。commit `f44406e` 只把 checkpoint 准备方式从符号链接改为硬链接。
 
-1. `pipablepytorch3d==0.7.6` advertises a universal wheel but embeds a
-   `cp311-cp311-linux_x86_64` WHEEL tag and `_C.cpython-311-...so`. Python 3.10
-   imports its pure Python transforms but cannot use that extension.
-2. `decord==0.6.0` plus `eva-decord==0.6.1` share 94 installed RECORD paths,
-   including decord's dist-info files. The published decord filename is tagged
-   `py3-none-manylinux2010`, while its internal WHEEL metadata incorrectly says
-   `cp36-cp36m-manylinux2010`. Import alone is not sufficient validation.
+## R0 中定位的依赖打包问题
 
-No pip downgrade or suppressed dependency-check failure is used. The proposed
-repair is a separately recorded dependency build, leaving upstream
-requirements.txt and all LaRA source unchanged:
+1. `pipablepytorch3d==0.7.6` 宣称是通用 wheel，却包含
+   `cp311-cp311-linux_x86_64` 标签和 CPython 3.11 `.so`；Python 3.10
+   只能导入纯 Python 部分，无法使用 native extension。
+2. `decord==0.6.0` 与 `eva-decord==0.6.1` 共享并覆盖 94 个安装路径；
+   decord 文件名标记为 `py3-none-manylinux2010`，内部 WHEEL 却错误标成
+   `cp36-cp36m-manylinux2010`。
 
-- Build official PyTorch3D v0.7.6 at
-  `f34104cf6ebefacd7b7e07955ee7aaa823e616ac` against torch 2.6/cu124 for Python
-  3.10 and CUDA architecture 8.6. All six transforms Python files were AST
-  identical to the original installed package (only comments differed).
-  Build succeeded; the incompatible package was replaced by the official wheel.
-- Use a single decord provider, removing the overlapping eva-decord
-  distribution. The official decord 0.6.0 wheel bytes are unpacked, only the
-  internal tag is changed to match its published ABI-neutral filename, and
-  RECORD is regenerated. The original wheel SHA256 is
-  `51997f20be8958e23b7c4061ba45d0efcd86bffd5fe81c695d0befee0d442976`;
-  the repaired wheel SHA256 in this run is
-  `991dd62b390a2393ad0e531f2dd8c6bc20dd26dc89ad85cff363b0de0323952c`.
-  Its bundled 2021 FFmpeg cannot decode the current AV1 dataset, so no such
-  capability is claimed. The unchanged official loader selects
-  `torchvision_av`; that path decoded three real 256x256 AV1 frames correctly.
+修复没有降级 pip，也没有忽略 `pip check`：
 
-The build recipe is `scripts/reproduction/build_dependency_wheels.sh`;
-`environment/lara-requirements.txt` is the upstream list with these three
-wheel entries removed and explicit communication/build dependencies added.
-Use the built wheels alongside that file, not that file alone. Native wheels
-are machine-specific artifacts, excluded from Git; rebuild on the 8-GPU
-server with its actual CUDA architectures rather than assuming H100.
+- 从官方 PyTorch3D v0.7.6 commit
+  `f34104cf6ebefacd7b7e07955ee7aaa823e616ac` 源码构建适配当前 Python、
+  torch、CUDA 和 GPU 架构的 wheel；
+- 只保留一个 decord provider；解包官方 0.6.0 wheel，只修内部 ABI tag，
+  重新生成 RECORD；
+- 原始 decord wheel SHA256：
+  `51997f20be8958e23b7c4061ba45d0efcd86bffd5fe81c695d0befee0d442976`；
+- 主机修复后 wheel SHA256：
+  `991dd62b390a2393ad0e531f2dd8c6bc20dd26dc89ad85cff363b0de0323952c`；
+- decord 内置旧 FFmpeg 无法解码当前 AV1 数据，但官方 loader 实际使用
+  `torchvision_av`，该路径已正确解码真实 256×256 AV1 帧。
 
-Checks already completed: server/model/Qwen3/dataset imports, local processor,
-GPU 0 BF16 matrix arithmetic, all 40 tasks' initial-state loads and real EGL
-reset/render of both cameras. Initial server log reports cuDNN 90100. Local
-backbone tokenizer lacks thinking/img_next tokens before model initialization;
-upstream QWen3 adds those in its initializer, to be validated with R1 loading.
-Client completed without rendering cleanup errors. Expected upstream warnings
-include Gym maintenance notice, missing optional robosuite private macros,
-matplotlib pyparsing deprecations, and the trusted-init-state torch.load future
-warning. None were hidden or used to replace a failed check.
+构建脚本：`scripts/reproduction/build_dependency_wheels.sh`。native wheel
+是机器相关产物，不进入 Git；8 GPU 服务器必须按真实 GPU 架构重新编译。
 
-## Upstream issues retained for later stages
+## 后续阶段需要持续追踪的问题
 
-These were identified at the baseline above; rebuilding the environments does
-not fix them. Investigate and document separately, with minimal independent
-commits when needed, rather than silently changing the method.
+- evaluator 构造 robot state 但不发送给 policy；
+- LIBERO client 使用 `min/max` 反归一化，base helper 使用 `q01/q99`；
+- 重复定义的 `baseframework.get_action_stats` 被标成 classmethod，却访问
+  instance `norm_stats`；LIBERO 正式评估绕过该 helper，因此 R1 未修模型；
+- checkpoint loader 有 optional-module `strict=False` 兼容逻辑；每次加载
+  都要记录 missing/unexpected keys；
+- README 的 `LIBERO_LEROBOT_ROOT` 不被训练路径读取，应使用已有的
+  `--datasets.vla_data.data_root_dir` override；
+- multistage launcher 只覆盖 5k/2k/2k/2k reasoning 阶段；Stage III 是
+  独立脚本，默认 60k、单进程、pretrained path 为空；
+- `img_next.use_teacher=false` 会关闭当前 forward 中的 visual supervision
+  loss，而论文描述 Stage I/II 使用 visual supervision；
+- Stage III YAML 默认仍保留 discrete action supervision 和 VLM weight 1，
+  发布 checkpoint 配置则关闭 action tokens 并设置 VLM weight 0；
+- gradient accumulation、gradient checkpointing、num_workers、DDP device
+  placement、optimizer/scheduler/RNG resume 都要在 R3/R4 前逐项验证。
 
-- Evaluator constructs state but does not send it to the policy. Preserve the
-  official behavior until its role is established.
-- The LIBERO client unnormalizes actions with `min/max`, while the duplicate
-  base-framework helper uses `q01/q99`. R1 preserves the official LIBERO
-  client behavior; confirm the released protocol before interpreting R2 gaps.
-- The final duplicate `baseframework.get_action_stats` is marked as a
-  classmethod but attempts to access instance `norm_stats`. LIBERO evaluation
-  reads the same statistics directly and is unaffected; no model-source fix
-  was needed for R1.
-- Checkpoint loader contains optional-module strict=False compatibility logic;
-  record and explain any missing/unexpected keys during R1.
-- README's LIBERO_LEROBOT_ROOT variable is not consumed by the training path;
-  use existing `--datasets.vla_data.data_root_dir` override.
-- Multistage launcher covers 5k/2k/2k/2k reasoning training only. Stage III is a
-  separate script defaulting to 60k/one process and an empty pretrained path.
-- Multistage `img_next.use_teacher=false` gates off visual-supervision loss in
-  current forward. The paper describes visual supervision in Stage I/II.
-- Stage III YAML defaults retain discrete action supervision and VLM weight 1;
-  released checkpoint config disables action tokens and sets VLM weight 0.
-- Gradient accumulation and gradient-checkpointing YAML fields are not visibly
-  wired through; num_workers is hardcoded. Verify before memory tuning.
-- Saved model state dict is not a complete optimizer/scheduler/RNG resume.
-- Training actually uses torchrun + Accelerate + DeepSpeedPlugin. Validate
-  rank/device placement, sharding, scheduler stepping and full resume before R4.
+## 修改原则
 
-## Change policy
-
-Each source repair requires root cause, reason, minimal diff and independent
-commit. Environment artifacts and R0 checks add no alternate model forward.
-Ignore datasets, caches, weights and large logs; commit source, configurations,
-version locks, small verification logs and result summaries only.
+每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
+权重、大日志和视频不进入 Git；Git 只保存代码、配置、环境锁、小型结果摘要
+和复现元数据。环境检查不得引入替代模型、fake data 或另一套 forward。

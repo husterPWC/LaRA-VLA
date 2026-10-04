@@ -1,9 +1,9 @@
-# Reproduction results
+# 复现结果
 
-This directory contains small, reviewable JSON/CSV summaries only. Raw logs,
-videos, checkpoints, and generated artifacts remain under ignored directories.
+本目录只保存体积小、可以直接审查的 JSON/CSV 结果摘要。原始日志、视频、
+checkpoint 和生成产物保存在被 Git 忽略的目录中。
 
-- `r1_checkpoint_preflight.json`: strict checkpoint, tokenizer, processor,
-  model-shape, real-frame preprocessing, and normalization checks.
-- `r1_official_checkpoint_smoke.json`: one real LIBERO rollout with the
-  released checkpoint on one RTX 3090.
+- `r1_checkpoint_preflight.json`：checkpoint 严格加载、tokenizer、processor、
+  模型 shape、真实图像预处理和归一化统计检查。
+- `r1_official_checkpoint_smoke.json`：使用发布 checkpoint 在单张 RTX 3090
+  上执行的一次真实 LIBERO rollout。
