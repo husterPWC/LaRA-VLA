@@ -155,6 +155,12 @@ class TrainerUtils:
     @staticmethod
     def _load_state_dict_strict(module, state_dict):
         """Load a full state dict while coordinating ZeRO-3 parameters."""
+        preprocess = getattr(
+            module, "_preprocess_state_dict_for_load", None
+        )
+        if callable(preprocess):
+            state_dict = preprocess(state_dict)
+
         zero3_enabled = any(
             hasattr(parameter, "ds_id") for parameter in module.parameters()
         )

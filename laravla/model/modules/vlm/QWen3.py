@@ -764,14 +764,17 @@ class _QWen3_VL_Interface(nn.Module):
             )
         return generation_output
 
-    def load_state_dict(self, state_dict, strict: bool = True):
-
+    def _preprocess_state_dict_for_load(self, state_dict):
         if not getattr(self, "use_img_next_teacher", True):
             pruned = {k: v for k, v in state_dict.items() if not k.startswith("visual_ema")}
             dropped = len(state_dict) - len(pruned)
             if dropped > 0:
                 logger.info(f"[load_state_dict] Dropped {dropped} visual_ema keys (use_img_next_teacher=False)")
             state_dict = pruned
+        return state_dict
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        state_dict = self._preprocess_state_dict_for_load(state_dict)
         return super().load_state_dict(state_dict, strict=strict)
 
     def build_qwenvl_inputs(self, images, instructions, solutions=None, **kwargs):
