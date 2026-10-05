@@ -66,6 +66,12 @@ def build_accelerator(cfg) -> Accelerator:
         offload_param_device=cfg.trainer.get(
             "deepspeed_offload_param_device", "none"
         ),
+        zero3_init_flag=bool(
+            cfg.trainer.get("deepspeed_zero3_init_flag", False)
+        ),
+        zero3_save_16bit_model=bool(
+            cfg.trainer.get("deepspeed_zero3_save_16bit_model", False)
+        ),
     )
     mixed_precision = (
         "bf16"

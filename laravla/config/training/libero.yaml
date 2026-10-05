@@ -136,3 +136,5 @@ trainer:
   deepspeed_zero_stage: 2
   deepspeed_offload_optimizer_device: "none"
   deepspeed_offload_param_device: "none"
+  deepspeed_zero3_init_flag: false
+  deepspeed_zero3_save_16bit_model: false

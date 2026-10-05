@@ -55,9 +55,11 @@ COMMON_ARGS=(
   --trainer.logging_frequency 1
   --trainer.eval_interval 20000000
   --trainer.min_save_step 0
-  --trainer.deepspeed_zero_stage 2
+  --trainer.deepspeed_zero_stage 3
   --trainer.deepspeed_offload_optimizer_device cpu
-  --trainer.deepspeed_offload_param_device none
+  --trainer.deepspeed_offload_param_device cpu
+  --trainer.deepspeed_zero3_init_flag true
+  --trainer.deepspeed_zero3_save_16bit_model true
   --trainer.enable_gradient_checkpointing false
   --trainer.save_final_model false
 )

@@ -282,8 +282,8 @@ Accelerate/DeepSpeed。训练步又在每次 micro-batch forward 前调用
 - 将 `zero_grad()` 移到 optimizer step 后，由 AcceleratedOptimizer 仅在同步
   更新步清梯度；
 - 将 dataloader 的 `num_workers` 改为配置项，默认仍为官方的 4；
-- 默认仍为 ZeRO-2、无 offload；R3 单卡 smoke 才显式覆盖为 CPU optimizer
-  offload。
+- 默认仍为 ZeRO-2、无 offload；R3 单卡 smoke 根据实测显存结果显式覆盖
+  ZeRO stage 和 offload。
 
 独立配置探针已验证：accumulation=3、bf16、ZeRO-2、CPU optimizer offload
 均进入最终 DeepSpeed 配置。该修复只使已有工程配置真正生效，不改变模型、
@@ -381,7 +381,7 @@ Stage II checkpoint 加载 `qwen_vl_interface`，连续 action head 需要重新
 - 正式 `libero_all` LeRobot 数据；
 - 本地 Qwen3-VL 4B backbone；
 - 固定 revision 的官方 FAST tokenizer；
-- batch 1、num_workers 0、bf16、ZeRO-2 CPU optimizer offload；
+- batch 1、num_workers 0、bf16、ZeRO-3 CPU parameter/optimizer offload；
 - 每个阶段 2 个 optimizer steps；
 - image-next teacher 在 Stage I/II 开启，在 Stage III 关闭；
 - W&B disabled，但完整写入本地 log、metrics 和 validation JSON。
@@ -400,6 +400,17 @@ bash scripts/reproduction/smoke_train_r3.sh stage3
 Stage I 首次运行保存完整 training state；第二条命令必须从 step 2 恢复并完成
 step 3。后续阶段保存正式 `.pt` 供链式加载，但关闭重复 training-state 和
 final-model 副本，以控制 3090 主机磁盘使用。正式 R4 默认配置仍保存完整状态。
+
+首次 Stage I 实跑证明 ZeRO-2 optimizer offload 在单进程 3090 上仍不可用：
+DeepSpeed update 时需要把完整 FP32 parameter partition（16.55 GiB）临时搬回
+GPU；模型与梯度已占约 10.1 GiB，因而在 optimizer step 精确触发 OOM。forward
+和 backward 此前均已运行到 optimizer update。
+
+R3 驱动因此改为 ZeRO-3，并同时把 parameter 与 optimizer state offload 到
+CPU；保存阶段开启 ZeRO-3 16-bit 权重汇聚。该调整只改变参数驻留/分片和保存
+方式，Qwen3-VL、LaRA forward、正式样本、loss、AdamW 数学定义和阶段设置均
+不变。仓库默认配置仍保留官方 ZeRO-2、无 offload；ZeRO-3 只由 24 GiB 单卡
+smoke 驱动显式覆盖。
 
 ## 修改原则
 
