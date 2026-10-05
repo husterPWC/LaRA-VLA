@@ -128,13 +128,59 @@ class _QWen3_VL_Interface(nn.Module):
             self.visual_ema = None
             return
         try:
-            self.visual_ema = copy.deepcopy(student_visual)
+            student_parameters = list(student_visual.parameters())
+            zero3_parameters = [
+                parameter
+                for parameter in student_parameters
+                if hasattr(parameter, "ds_id")
+            ]
+
+            if zero3_parameters:
+                # Qwen is constructed under deepspeed.zero.Init when the 3090
+                # smoke test uses ZeRO-3.  A direct deepcopy would copy the
+                # partition placeholders (shape/numel == 0) and their ZeRO
+                # metadata instead of a usable teacher.  Gather the official
+                # student weights and materialize ordinary Parameters for the
+                # EMA module; DeepSpeed will partition this registered module
+                # normally when Accelerator.prepare() builds the engine.
+                from deepspeed import zero
+
+                with zero.GatheredParameters(zero3_parameters, modifier_rank=0):
+                    visual_ema = copy.deepcopy(student_visual)
+                    self._materialize_plain_parameters(visual_ema)
+            else:
+                visual_ema = copy.deepcopy(student_visual)
+
+            self.visual_ema = visual_ema
             self.visual_ema.requires_grad_(False)
             self.visual_ema.eval()
             logger.info("[img_next_ema] Initialized EMA teacher vision encoder")
         except Exception as exc:
             logger.warning(f"[img_next_ema] Failed to init EMA teacher vision encoder: {exc}")
             self.visual_ema = None
+
+    @staticmethod
+    def _materialize_plain_parameters(module: nn.Module) -> None:
+        """Replace copied ZeRO placeholders with independent full tensors."""
+        parameter_copies = {}
+        buffer_copies = {}
+        for child in module.modules():
+            for name, parameter in list(child._parameters.items()):
+                if parameter is None:
+                    continue
+                key = id(parameter)
+                if key not in parameter_copies:
+                    parameter_copies[key] = nn.Parameter(
+                        parameter.detach().clone(), requires_grad=False
+                    )
+                child._parameters[name] = parameter_copies[key]
+            for name, buffer in list(child._buffers.items()):
+                if buffer is None:
+                    continue
+                key = id(buffer)
+                if key not in buffer_copies:
+                    buffer_copies[key] = buffer.detach().clone()
+                child._buffers[name] = buffer_copies[key]
 
     @torch.no_grad()
     def update_img_next_ema(self, momentum: Optional[float] = None) -> None:
@@ -154,7 +200,18 @@ class _QWen3_VL_Interface(nn.Module):
             raise ValueError(f"EMA momentum must be in [0,1], got {m}")
 
         for p_ema, p in zip(teacher_visual.parameters(), student_visual.parameters()):
-            p_ema.data.mul_(m).add_(p.data, alpha=1.0 - m)
+            zero3_parameters = [
+                parameter
+                for parameter in (p_ema, p)
+                if hasattr(parameter, "ds_id")
+            ]
+            if zero3_parameters:
+                from deepspeed import zero
+
+                with zero.GatheredParameters(zero3_parameters, modifier_rank=0):
+                    p_ema.data.mul_(m).add_(p.data, alpha=1.0 - m)
+            else:
+                p_ema.data.mul_(m).add_(p.data, alpha=1.0 - m)
         for b_ema, b in zip(teacher_visual.buffers(), student_visual.buffers()):
             b_ema.copy_(b)
 
