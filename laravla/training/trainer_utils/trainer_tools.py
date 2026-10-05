@@ -206,8 +206,15 @@ class TrainerUtils:
         if dist.get_rank() != 0:
             return
         print("📊 model parameter statistics:")
-        num_params = sum(p.numel() for p in model.parameters())
-        num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        def parameter_numel(parameter):
+            # ZeRO-3 keeps a zero-sized local placeholder and records the
+            # logical size in ds_numel before Accelerator.prepare().
+            return int(getattr(parameter, "ds_numel", parameter.numel()))
+
+        num_params = sum(parameter_numel(p) for p in model.parameters())
+        num_trainable_params = sum(
+            parameter_numel(p) for p in model.parameters() if p.requires_grad
+        )
         print(
             f"# Parameters (in millions): {num_params / 10**6:.3f} Total, {num_trainable_params / 10**6:.3f} Trainable"
         )
