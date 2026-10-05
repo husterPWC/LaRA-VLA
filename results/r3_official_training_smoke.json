@@ -1,0 +1,304 @@
+{
+  "status": "pass",
+  "date": "2026-10-06",
+  "scope": "R3 RTX 3090 official multistage training smoke",
+  "implementation_commit": "80e83fd3c7cba563037c1adf7bcd6392252daab4",
+  "upstream_baseline": "93b5c03c691e38a3c9e90878e76557009e2df261",
+  "gpu": "NVIDIA GeForce RTX 3090 24 GiB (GPU 0)",
+  "dataset_root": "/data/CodePWC/lara_datasets/libero_lerobot_all",
+  "backbone": "/home/robot/codePWC/LaRA/StarVLA-Qwen3-VL-4B-Instruct-Action",
+  "fast_revision": "ec4d7aa71691cac0b8bed6942be45684db2110f4",
+  "execution": {
+    "model": "official Qwen3-VL 4B + LaRA-VLA",
+    "data": "official LIBERO LeRobot mixture",
+    "precision": "bf16",
+    "deepspeed": "ZeRO-3 with CPU parameter and optimizer offload",
+    "per_device_batch_size": 1,
+    "gradient_accumulation_steps": 1,
+    "num_workers": 0
+  },
+  "resume_validation": {
+    "checkpoint": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage1/checkpoints/steps_2_training_state",
+    "restored_completed_steps": 2,
+    "restored_batches_seen": 2,
+    "restored_epoch": 0,
+    "skipped_consumed_batches": 2,
+    "continued_to_step": 3,
+    "status": "pass"
+  },
+  "stages": {
+    "stage1": {
+      "config": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage1/config.yaml",
+      "metrics": [
+        {
+          "step": 1,
+          "vlm_loss": 6.599239349365234,
+          "img_next_loss": 5.198668479919434,
+          "total_loss": 7.119106292724609,
+          "grad_norm": 313.8924865722656,
+          "data_time": 0.1568457423709333,
+          "model_time": 16.3297584974207,
+          "learning_rate": 5.0833333333333335e-06,
+          "learning_rate/qwen_vl_interface": 5.0833333333333335e-06,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9493212699890137,
+          "gpu_memory/reserved_gib": 8.1328125,
+          "gpu_memory/peak_allocated_gib": 4.920903205871582
+        },
+        {
+          "step": 2,
+          "vlm_loss": 3.202904462814331,
+          "total_loss": 3.202904462814331,
+          "grad_norm": 55.62642288208008,
+          "data_time": 0.029504581820219755,
+          "model_time": 15.752350348047912,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9479289054870605,
+          "gpu_memory/reserved_gib": 9.98828125,
+          "gpu_memory/peak_allocated_gib": 5.460158348083496
+        },
+        {
+          "step": 3,
+          "vlm_loss": 2.695897340774536,
+          "total_loss": 2.695897340774536,
+          "grad_norm": 54.00440979003906,
+          "data_time": 0.31753507489338517,
+          "model_time": 14.804709840100259,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9493212699890137,
+          "gpu_memory/reserved_gib": 8.12890625,
+          "gpu_memory/peak_allocated_gib": 4.825387001037598
+        }
+      ],
+      "validation": {
+        "completed_steps": 3,
+        "observed_loss_counts": {
+          "action_loss": 0,
+          "vlm_loss": 3,
+          "img_next_loss": 1
+        },
+        "finite_nonzero_grad_steps": 3,
+        "parameter_counts": {
+          "total": 5019205895,
+          "trainable": 4442385408,
+          "frozen": 576820487
+        }
+      },
+      "checkpoint_bytes": {
+        "steps_2_pytorch_model.pt": 10038873418,
+        "steps_3_pytorch_model.pt": 10038873418
+      }
+    },
+    "stage2_1": {
+      "config": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage2_1/config.yaml",
+      "metrics": [
+        {
+          "step": 1,
+          "vlm_loss": 4.159201622009277,
+          "img_next_loss": 5.867046356201172,
+          "total_loss": 5.332611083984375,
+          "grad_norm": 52.61741638183594,
+          "data_time": 0.39056506007909775,
+          "model_time": 19.520860694348812,
+          "learning_rate": 5.0833333333333335e-06,
+          "learning_rate/qwen_vl_interface": 5.0833333333333335e-06,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9493212699890137,
+          "gpu_memory/reserved_gib": 20.72265625,
+          "gpu_memory/peak_allocated_gib": 11.190794467926025
+        },
+        {
+          "step": 2,
+          "vlm_loss": 2.9739925861358643,
+          "total_loss": 2.9739925861358643,
+          "grad_norm": 87.42124938964844,
+          "data_time": 0.06175774708390236,
+          "model_time": 18.70971062872559,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9479289054870605,
+          "gpu_memory/reserved_gib": 20.72265625,
+          "gpu_memory/peak_allocated_gib": 11.190814971923828
+        }
+      ],
+      "validation": {
+        "completed_steps": 2,
+        "observed_loss_counts": {
+          "action_loss": 0,
+          "vlm_loss": 2,
+          "img_next_loss": 1
+        },
+        "finite_nonzero_grad_steps": 2,
+        "parameter_counts": {
+          "total": 5019205895,
+          "trainable": 4442385408,
+          "frozen": 576820487
+        }
+      },
+      "checkpoint_bytes": {
+        "steps_2_pytorch_model.pt": 10038873418
+      }
+    },
+    "stage2_2": {
+      "config": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage2_2/config.yaml",
+      "metrics": [
+        {
+          "step": 1,
+          "vlm_loss": 5.116007328033447,
+          "img_next_loss": 4.549301624298096,
+          "total_loss": 6.025867462158203,
+          "grad_norm": 162.82215881347656,
+          "data_time": 0.10297400504350662,
+          "model_time": 21.051594311371446,
+          "learning_rate": 5.0833333333333335e-06,
+          "learning_rate/qwen_vl_interface": 5.0833333333333335e-06,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9493212699890137,
+          "gpu_memory/reserved_gib": 20.833984375,
+          "gpu_memory/peak_allocated_gib": 17.008679389953613
+        },
+        {
+          "step": 2,
+          "vlm_loss": 4.591427326202393,
+          "total_loss": 4.591427326202393,
+          "grad_norm": 9944.6611328125,
+          "data_time": 0.02911022398620844,
+          "model_time": 20.73746223282069,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9479289054870605,
+          "gpu_memory/reserved_gib": 20.833984375,
+          "gpu_memory/peak_allocated_gib": 17.010355949401855
+        }
+      ],
+      "validation": {
+        "completed_steps": 2,
+        "observed_loss_counts": {
+          "action_loss": 0,
+          "vlm_loss": 2,
+          "img_next_loss": 1
+        },
+        "finite_nonzero_grad_steps": 2,
+        "parameter_counts": {
+          "total": 5019205895,
+          "trainable": 4442385408,
+          "frozen": 576820487
+        }
+      },
+      "checkpoint_bytes": {
+        "steps_2_pytorch_model.pt": 10038873418
+      }
+    },
+    "stage2_3": {
+      "config": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage2_3/config.yaml",
+      "metrics": [
+        {
+          "step": 1,
+          "vlm_loss": 8.143570899963379,
+          "img_next_loss": 4.36427116394043,
+          "total_loss": 9.016425132751465,
+          "grad_norm": 796.4739990234375,
+          "data_time": 0.10055537708103657,
+          "model_time": 22.730485821142793,
+          "learning_rate": 5.0833333333333335e-06,
+          "learning_rate/qwen_vl_interface": 5.0833333333333335e-06,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9493212699890137,
+          "gpu_memory/reserved_gib": 20.7734375,
+          "gpu_memory/peak_allocated_gib": 17.083813667297363
+        },
+        {
+          "step": 2,
+          "vlm_loss": 6.365066051483154,
+          "total_loss": 6.365066051483154,
+          "grad_norm": 618.7265625,
+          "data_time": 0.027876938227564096,
+          "model_time": 22.55783533398062,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9479289054870605,
+          "gpu_memory/reserved_gib": 20.7734375,
+          "gpu_memory/peak_allocated_gib": 17.084531784057617
+        }
+      ],
+      "validation": {
+        "completed_steps": 2,
+        "observed_loss_counts": {
+          "action_loss": 0,
+          "vlm_loss": 2,
+          "img_next_loss": 1
+        },
+        "finite_nonzero_grad_steps": 2,
+        "parameter_counts": {
+          "total": 5019205895,
+          "trainable": 4442385408,
+          "frozen": 576820487
+        }
+      },
+      "checkpoint_bytes": {
+        "steps_2_pytorch_model.pt": 10038873418
+      }
+    },
+    "stage3": {
+      "config": "/home/robot/codePWC/LaRA/runs/repro_r3_official_smoke/stage3/config.yaml",
+      "metrics": [
+        {
+          "step": 1,
+          "action_loss": 1.1245101690292358,
+          "vlm_loss": 5.149836540222168,
+          "total_loss": 1.1245101690292358,
+          "grad_norm": 68.03289031982422,
+          "data_time": 0.10548125812783837,
+          "model_time": 23.395981637295336,
+          "learning_rate": 5.0833333333333335e-06,
+          "learning_rate/qwen_vl_interface": 5.0833333333333335e-06,
+          "learning_rate/action_model": 5.0833333333333333e-05,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9486246109008789,
+          "gpu_memory/reserved_gib": 20.75390625,
+          "gpu_memory/peak_allocated_gib": 17.363000869750977
+        },
+        {
+          "step": 2,
+          "action_loss": 0.9961128234863281,
+          "vlm_loss": 4.167135715484619,
+          "total_loss": 0.9961128234863281,
+          "grad_norm": 14.850675582885742,
+          "data_time": 0.0302363196387887,
+          "model_time": 24.731057168915868,
+          "learning_rate": 1.6666666666666668e-07,
+          "learning_rate/qwen_vl_interface": 1.6666666666666668e-07,
+          "learning_rate/action_model": 1.6666666666666667e-06,
+          "epoch": 0.0,
+          "gpu_memory/allocated_gib": 0.9486246109008789,
+          "gpu_memory/reserved_gib": 20.794921875,
+          "gpu_memory/peak_allocated_gib": 17.364040851593018
+        }
+      ],
+      "validation": {
+        "completed_steps": 2,
+        "observed_loss_counts": {
+          "action_loss": 2,
+          "vlm_loss": 2,
+          "img_next_loss": 0
+        },
+        "finite_nonzero_grad_steps": 2,
+        "parameter_counts": {
+          "total": 4603858183,
+          "trainable": 4603858183,
+          "frozen": 0
+        }
+      },
+      "checkpoint_bytes": {
+        "steps_2_pytorch_model.pt": 9208067882
+      }
+    }
+  }
+}

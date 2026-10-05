@@ -7,7 +7,9 @@
 - R0：代码、依赖、CUDA、LIBERO 和 EGL 环境验收；
 - R1：使用作者发布 checkpoint 完成真实单卡 LIBERO rollout；
 - R2：在服务器上执行官方 4 suite、2000 rollout 正式评估；
-- R3/R4：只有 R2 评估链路一致后才开始训练验证和完整训练。
+- R3：在 R1 通过且服务器 R2 正式评估运行期间，按用户指示并行完成本机
+  3090 官方训练链路 smoke；
+- R4：R2 结果验收后再开始 8 卡完整训练。
 
 当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
 [R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
@@ -418,6 +420,72 @@ ZeRO-3 首次初始化又定位到官方 wrapper 的 device placement 冲突：
 修复只在 `trainer.deepspeed_zero_stage == 3` 时传入 `device_map=None`，让
 Transformers/DeepSpeed 的 ZeRO-3 初始化上下文负责参数放置；默认 ZeRO-2 与
 推理路径仍沿用原来的单 CUDA device map。模型结构、权重和 forward 均不变。
+
+### R3 ZeRO-3 EMA 与阶段 checkpoint 修复
+
+Stage I 的首次 ZeRO-3 实跑完成了真实 forward/backward，但论文视觉预测监督
+没有进入总损失。根因是官方 Qwen wrapper 在学生视觉编码器已经由
+`zero.Init` 分区后直接执行 `copy.deepcopy`；教师副本继承了 shape/numel 为 0
+的分区占位及无效 ZeRO metadata。教师前向先报 `NOT_AVAILABLE`，随后破坏
+DeepSpeed 参数抓取顺序并触发 tracing error。
+
+最小修复保持 EMA 教师与损失定义不变：初始化教师前使用
+`deepspeed.zero.GatheredParameters` 汇聚学生视觉参数，将副本重新物化为普通
+完整参数，再由 `Accelerator.prepare()` 正常纳入 ZeRO-3；每两步执行 EMA 时
+也成对汇聚师生参数后按原公式更新。修复后 Stage I 第一步实际得到
+`img_next_loss=5.198668`，并参与总损失和反向。
+
+Stage I → Stage II 的首次加载又发现官方 `model.load_state_dict(strict=True)`
+不能把完整 checkpoint 张量直接写入 ZeRO-3 的零尺寸占位参数。修复按照
+DeepSpeed 官方预训练加载方法逐模块汇聚直接参数，并调用
+`_load_from_state_dict`；missing、unexpected 和 shape error 仍按 strict 模式
+汇总并直接失败，没有使用 `strict=False`。Stage III 关闭 EMA teacher 时继续
+复用官方 Qwen wrapper 已有的 `visual_ema` key 过滤语义。
+
+ZeRO-3 初始化完成前的参数统计也改为读取 logical `ds_numel`。修复后 Stage
+I/II 的总参数为 5,019,205,895，其中可训练 4,442,385,408；Stage III 不构造
+EMA teacher，总参数与可训练参数均为 4,603,858,183。
+
+相关独立提交：
+
+- `62152b2`：协调 ZeRO-3 下的 EMA teacher；
+- `01d0064`：统计 ZeRO-3 logical 参数量；
+- `a7fd49a`：严格加载 ZeRO-3 阶段 checkpoint；
+- `80e83fd`：保留 Stage III 的 Qwen checkpoint 过滤语义。
+
+### R3 单卡训练结果
+
+**R3 于 2026-10-06 通过。** 所有阶段均使用正式 Qwen3-VL 4B、LaRA-VLA、
+LIBERO LeRobot 数据、CoT/bbox/FAST action annotations 和官方 forward。smoke
+只将 batch、worker 和 optimizer steps 缩小，并用 ZeRO-3 CPU offload 适配
+RTX 3090 24 GiB。
+
+| 论文阶段 | 代码 stage | steps | 必需损失观测 | 非零有限梯度步 | 峰值显存 |
+|---|---:|---:|---|---:|---:|
+| Stage I | 1 | 2 + resume 1 | VLM 3 次，image-next 1 次 | 3 | 5.46 GiB |
+| Stage II-1 | 2 | 2 | VLM 2 次，image-next 1 次 | 2 | 11.19 GiB |
+| Stage II-2 | 3 | 2 | VLM 2 次，image-next 1 次 | 2 | 17.01 GiB |
+| Stage II-3 | 4 | 2 | VLM 2 次，image-next 1 次 | 2 | 17.08 GiB |
+| Stage III | 4，continuous | 2 | action 2 次 | 2 | 17.36 GiB |
+
+Stage I 第 2/3 步及 Stage II 各段第 2 步没有 `img_next_loss`，原因是抽到的样本
+被正式 next-frame fallback mask 判为无效视觉目标；每个需要视觉监督的阶段都
+至少有一个有效真实样本产生 image-next loss。没有用假数据或强制伪造 loss。
+
+Stage III 的 VLM loss 仍由官方 forward 计算并写入诊断指标，但配置权重为 0；
+两步 `total_loss` 分别严格等于 continuous action loss `1.124510` 和
+`0.996113`。Qwen/action optimizer group 基础学习率分别为 `1e-5` 和 `1e-4`。
+
+完整 resume 验收从 `steps_2_training_state` 恢复 model、optimizer、scheduler、
+RNG 和 trainer metadata，日志确认恢复 `completed_steps=2`、`batches_seen=2`、
+`epoch=0`，跳过两个已消费 batch 后完成 step 3。Stage I checkpoint 随后被
+Stage II-1 严格加载；三个 Stage II checkpoint 逐段链式加载；Stage III 严格
+加载最终 `qwen_vl_interface` 并按配置丢弃 315 个 EMA teacher keys。
+
+机器可读汇总为 `results/r3_official_training_smoke.json`。原始 config、日志、
+metrics、validation、约 10 GB 的阶段 checkpoint 和约 53 GB 的完整 ZeRO
+training state 位于被 Git 忽略的
+`../runs/repro_r3_official_smoke/`，不进入仓库。
 
 ## 修改原则
 
