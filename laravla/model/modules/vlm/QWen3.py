@@ -53,12 +53,14 @@ class _QWen3_VL_Interface(nn.Module):
         model_id = qwenvl_config.get("base_vlm", "Qwen/Qwen3-VL-4B-Instruct")
         cache_dir = qwenvl_config.get("cache_dir", None)
         attn_impl = qwenvl_config.get("attn_implementation", "flash_attention_2")
+        zero_stage = int(config.trainer.get("deepspeed_zero_stage", 2))
+        device_map = None if zero_stage == 3 else "cuda"
 
         model = Qwen3VLForConditionalGeneration.from_pretrained(
             model_id,
             attn_implementation=attn_impl,
             dtype=torch.bfloat16,
-            device_map="cuda",
+            device_map=device_map,
             cache_dir=cache_dir,
         )
         processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)

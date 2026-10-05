@@ -412,6 +412,13 @@ CPU；保存阶段开启 ZeRO-3 16-bit 权重汇聚。该调整只改变参数�
 不变。仓库默认配置仍保留官方 ZeRO-2、无 offload；ZeRO-3 只由 24 GiB 单卡
 smoke 驱动显式覆盖。
 
+ZeRO-3 首次初始化又定位到官方 wrapper 的 device placement 冲突：
+`Qwen3VLForConditionalGeneration.from_pretrained` 被固定传入
+`device_map="cuda"`，而 Transformers 禁止 ZeRO-3 与 `device_map` 并用。最小
+修复只在 `trainer.deepspeed_zero_stage == 3` 时传入 `device_map=None`，让
+Transformers/DeepSpeed 的 ZeRO-3 初始化上下文负责参数放置；默认 ZeRO-2 与
+推理路径仍沿用原来的单 CUDA device map。模型结构、权重和 forward 均不变。
+
 ## 修改原则
 
 每个源码修复必须记录根因、修改原因、最小 diff，并独立提交。数据集、cache、
