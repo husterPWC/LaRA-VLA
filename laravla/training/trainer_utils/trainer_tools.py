@@ -6,6 +6,7 @@ endpoints (e.g., JSONL local logs, Weights & Biases).
 """
 
 from typing import Tuple
+from collections import OrderedDict
 import re
 import json
 import numpy as np
@@ -152,6 +153,80 @@ import torch.distributed as dist
 
 class TrainerUtils:
     @staticmethod
+    def _load_state_dict_strict(module, state_dict):
+        """Load a full state dict while coordinating ZeRO-3 parameters."""
+        zero3_enabled = any(
+            hasattr(parameter, "ds_id") for parameter in module.parameters()
+        )
+        if not zero3_enabled:
+            module.load_state_dict(state_dict, strict=True)
+            return
+
+        from deepspeed import zero
+
+        missing_keys = []
+        unexpected_keys = []
+        error_msgs = []
+        metadata = getattr(state_dict, "_metadata", None)
+        state_dict = OrderedDict(state_dict)
+        if metadata is not None:
+            state_dict._metadata = metadata
+
+        def load(current_module, local_state_dict, prefix=""):
+            local_metadata = (
+                {} if metadata is None else metadata.get(prefix[:-1], {})
+            )
+            direct_parameters = list(
+                current_module.parameters(recurse=False)
+            )
+            with zero.GatheredParameters(
+                direct_parameters, modifier_rank=0
+            ):
+                current_module._load_from_state_dict(
+                    local_state_dict,
+                    prefix,
+                    local_metadata,
+                    True,
+                    missing_keys,
+                    unexpected_keys,
+                    error_msgs,
+                )
+
+            for name, child in current_module._modules.items():
+                if child is None:
+                    continue
+                child_prefix = prefix + name + "."
+                child_state_dict = {
+                    key: value
+                    for key, value in local_state_dict.items()
+                    if key.startswith(child_prefix)
+                }
+                load(child, child_state_dict, child_prefix)
+
+        load(module, state_dict)
+
+        if unexpected_keys:
+            error_msgs.insert(
+                0,
+                "Unexpected key(s) in state_dict: {}. ".format(
+                    ", ".join(f'\"{key}\"' for key in unexpected_keys)
+                ),
+            )
+        if missing_keys:
+            error_msgs.insert(
+                0,
+                "Missing key(s) in state_dict: {}. ".format(
+                    ", ".join(f'\"{key}\"' for key in missing_keys)
+                ),
+            )
+        if error_msgs:
+            raise RuntimeError(
+                "Error(s) in loading state_dict for {}:\n\t{}".format(
+                    module.__class__.__name__, "\n\t".join(error_msgs)
+                )
+            )
+
+    @staticmethod
     def freeze_backbones(model, freeze_modules=""):
         """
         directly freeze the specified submodules based on the relative module path list (patterns), no longer recursively find all submodule names:
@@ -252,7 +327,9 @@ class TrainerUtils:
                     prefix = path + "."
                     sub_state_dict = {k[len(prefix) :]: v for k, v in checkpoint.items() if k.startswith(prefix)}
                     if sub_state_dict:
-                        module.load_state_dict(sub_state_dict, strict=True)
+                        TrainerUtils._load_state_dict_strict(
+                            module, sub_state_dict
+                        )
                         if dist.get_rank() == 0:
                             print(f"✅ parameters loaded to module '{path}'")
                         loaded_modules.append(path)
@@ -262,7 +339,7 @@ class TrainerUtils:
                     print(f"❌ cannot find module path: {path}")
         else:  # full load
             try:
-                model.load_state_dict(checkpoint, strict=True)
+                TrainerUtils._load_state_dict_strict(model, checkpoint)
                 if dist.get_rank() == 0:
                     print("✅ loaded <full_model> model parameters")
                 loaded_modules = ["<full_model>"]
