@@ -8,19 +8,21 @@ set -euo pipefail
 export TOKENIZERS_PARALLELISM=false
 
 # ===================== 按需改这里 =====================
-CONFIG_YAML=laravla/config/training/libero.yaml
-RUN_ROOT=results/LiberoVLM
-RUN_ID_PREFIX=libero_vlm
-NUM_GPUS=8
-MASTER_PORT=29513
-WANDB_PROJECT=libero_vlm
-WANDB_ENTITY=
+CONFIG_YAML="${CONFIG_YAML:-laravla/config/training/libero.yaml}"
+RUN_ROOT="${RUN_ROOT:-results/LiberoVLM}"
+RUN_ID_PREFIX="${RUN_ID_PREFIX:-libero_vlm}"
+NUM_GPUS="${NUM_GPUS:-8}"
+MASTER_PORT="${MASTER_PORT:-29513}"
+WANDB_PROJECT="${WANDB_PROJECT:-libero_vlm}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # 非空则只加载部分模块；空 = 整模加载
-RELOAD_MODULES=
-IMG_NEXT_USE_TEACHER=true
+RELOAD_MODULES="${RELOAD_MODULES:-}"
+IMG_NEXT_USE_TEACHER="${IMG_NEXT_USE_TEACHER:-true}"
 
-STEPS_CACHE_PATH="${RUN_ROOT}/steps_cache/libero_vlm"
+STEPS_CACHE_PATH="${STEPS_CACHE_PATH:-${RUN_ROOT}/steps_cache/libero_vlm}"
+WRITE_STEPS_CACHE="${WRITE_STEPS_CACHE:-true}"
+DRY_RUN="${DRY_RUN:-false}"
 
 declare -A BRIDGE_STAGE=( [1]=1 [2]=2 [3]=3 [4]=4 )
 
@@ -37,19 +39,30 @@ declare -A SAVE_INTERVAL=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
 declare -A CKPT_STEP=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
 
 START_STAGE="${START_STAGE:-1}"
+END_STAGE="${END_STAGE:-4}"
 # ====================================================
 
-mkdir -p "${STEPS_CACHE_PATH}"
+if (( START_STAGE < 1 || START_STAGE > 4 || END_STAGE < 1 || END_STAGE > 4 || START_STAGE > END_STAGE )); then
+  echo "阶段范围无效: START_STAGE=${START_STAGE}, END_STAGE=${END_STAGE}" >&2
+  exit 2
+fi
+
+if [[ "${DRY_RUN}" != "true" ]]; then
+  mkdir -p "${STEPS_CACHE_PATH}"
+fi
 
 run_one_stage() {
   local stage="$1"
   local load_ckpt="$2"
+  shift 2
 
   local run_id="${RUN_ID_PREFIX}_stage_${stage}"
   local out="${RUN_ROOT}/${run_id}"
 
-  mkdir -p "${out}"
-  cp "$0" "${out}/run_command.sh"
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    mkdir -p "${out}"
+    cp "$0" "${out}/run_command.sh"
+  fi
 
   local args=(
     --config_yaml "${CONFIG_YAML}"
@@ -65,7 +78,7 @@ run_one_stage() {
     --framework.img_next.loss_weight "${IMG_NEXT_LOSS_WEIGHT[$stage]}"
     --framework.img_next.use_teacher "${IMG_NEXT_USE_TEACHER}"
     --datasets.vla_data.bridge_annotations.steps_cache_path "${STEPS_CACHE_PATH}"
-    --datasets.vla_data.bridge_annotations.write_steps_cache true
+    --datasets.vla_data.bridge_annotations.write_steps_cache "${WRITE_STEPS_CACHE}"
   )
   [[ -n "${WANDB_ENTITY}" ]] && args+=( --wandb_entity "${WANDB_ENTITY}" )
 
@@ -74,26 +87,36 @@ run_one_stage() {
     [[ -n "${RELOAD_MODULES}" ]] && args+=( --trainer.reload_modules "${RELOAD_MODULES}" )
   fi
 
-  torchrun \
-    --nproc_per_node="${NUM_GPUS}" \
-    --master_port="${MASTER_PORT}" \
-    laravla/training/train.py \
-    "${args[@]}" \
+  local command=(
+    torchrun
+    --nproc_per_node="${NUM_GPUS}"
+    --master_port="${MASTER_PORT}"
+    laravla/training/train.py
+    "${args[@]}"
     "$@"
+  )
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    printf 'stage %s command:' "${stage}"
+    printf ' %q' "${command[@]}"
+    printf '\n'
+  else
+    "${command[@]}"
+  fi
 }
 
 for stage in 1 2 3 4; do
   (( stage < START_STAGE )) && continue
+  (( stage > END_STAGE )) && continue
 
   load_ckpt=""
   if (( stage > 1 )); then
     prev=$((stage - 1))
     load_ckpt="${RUN_ROOT}/${RUN_ID_PREFIX}_stage_${prev}/checkpoints/steps_${CKPT_STEP[$prev]}_pytorch_model.pt"
-    if [[ ! -f "${load_ckpt}" ]]; then
+    if [[ "${DRY_RUN}" != "true" && ! -f "${load_ckpt}" ]]; then
       echo "缺少上一阶段权重: ${load_ckpt}" >&2
       exit 1
     fi
   fi
 
-  run_one_stage "${stage}" "${load_ckpt}"
+  run_one_stage "${stage}" "${load_ckpt}" "$@"
 done
