@@ -571,6 +571,11 @@ R4 已完成本地启动链路审计，尚未宣布正式 8 卡训练通过。�
 steps cache 与 R3 的 config key、step 数和顺序一致；Stage I/II 已从该
 cache 解码真实图像、action、CoT、bbox 和 FAST token。详细命令和验收标准见
 `docs/R4_SERVER_TRAINING.md`。
+官方数据文件的聚合 SHA256 为
+`99e134b7fda131b0d33b83baaec820131909be190c76a3cecf613ae30248d719`，
+FAST 文件的聚合 SHA256 为
+`7cd45fc4ea68c30f3ec2ecee636feb0bb145d0d21414c222a0d3069ee7d389e2`；
+`scripts/reproduction/verify_r4_assets.py` 在服务器训练前重算并严格比对。
 
 ## 修改原则
 

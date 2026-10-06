@@ -201,6 +201,10 @@ case "${MODE}" in
     check_gpus
     mkdir -p "${RUN_ROOT}/preflight" "${STEPS_CACHE_PATH}" "${HF_HOME}" "${TORCH_EXTENSIONS_DIR}"
     "${PYTHON_BIN}" -m pip check
+    "${PYTHON_BIN}" "${REPO_ROOT}/scripts/reproduction/verify_r4_assets.py" \
+      --dataset-root "${DATASET_ROOT}" \
+      --fast-tokenizer "${FAST_TOKENIZER}" \
+      --output "${RUN_ROOT}/preflight/assets.json"
     for stage in 1 2 3 4; do
       cache_args=(--steps-cache-path "${STEPS_CACHE_PATH}")
       (( stage == 1 )) && cache_args+=(--write-steps-cache)

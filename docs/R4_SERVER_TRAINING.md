@@ -117,6 +117,28 @@ hf download physical-intelligence/fast \
 
 在所有 8 张 GPU 空闲时执行：
 
+先单独验证刚传输的两个目录（读取约 2.1 GB）：
+
+```bash
+cd "$REPO"
+python scripts/reproduction/verify_r4_assets.py \
+  --dataset-root "$LARA_DATASET_ROOT" \
+  --fast-tokenizer "$LARA_FAST_TOKENIZER" \
+  --output "$REPRO_ROOT/r4-assets.json"
+```
+
+成功时最后输出 `R4 ASSET VERIFICATION PASS`。数据集应为 5163 个官方文件、
+2,011,668,877 字节，聚合 SHA256 为
+`99e134b7fda131b0d33b83baaec820131909be190c76a3cecf613ae30248d719`；FAST 应为
+7 个官方文件、698,459 字节，聚合 SHA256 为
+`7cd45fc4ea68c30f3ec2ecee636feb0bb145d0d21414c222a0d3069ee7d389e2`。
+
+该脚本会忽略训练后生成的 steps cache 和 lock，只校验 Hugging Face metadata
+对应的官方发布文件。因此服务器使用复制或固定 revision 重新下载，
+应得到同一指纹。
+
+然后执行完整 R4 预检：
+
 ```bash
 cd "$REPO"
 scripts/reproduction/run_r4_training.sh preflight \
