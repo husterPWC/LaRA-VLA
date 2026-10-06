@@ -161,8 +161,6 @@ COMMON_ARGS=(
   --datasets.vla_data.data_root_dir "${DATASET_ROOT}"
   --datasets.vla_data.num_workers "${NUM_WORKERS}"
   --datasets.vla_data.bridge_annotations.fast_tokenizer_name "${FAST_TOKENIZER}"
-  --datasets.vla_data.bridge_annotations.steps_cache_path "${STEPS_CACHE_PATH}"
-  --datasets.vla_data.bridge_annotations.write_steps_cache false
   --framework.qwenvl.base_vlm "${BACKBONE}"
   --framework.qwenvl.cache_dir "${HF_HOME}"
   --trainer.eval_interval 20000000
@@ -175,6 +173,11 @@ COMMON_ARGS=(
   --trainer.deepspeed_zero3_init_flag "${ZERO3_INIT}"
   --trainer.deepspeed_zero3_save_16bit_model "${ZERO3_SAVE}"
   --trainer.enable_gradient_checkpointing "${GRADIENT_CHECKPOINTING}"
+)
+
+CACHE_ARGS=(
+  --datasets.vla_data.bridge_annotations.steps_cache_path "${STEPS_CACHE_PATH}"
+  --datasets.vla_data.bridge_annotations.write_steps_cache false
 )
 
 run_reasoning() {
@@ -221,12 +224,22 @@ case "${MODE}" in
     echo "R4 PREFLIGHT PASS: ${RUN_ROOT}/preflight"
     ;;
   dry-run)
-    DRY_RUN=true RUN_ROOT="${RUN_ROOT}/reasoning" STEPS_CACHE_PATH="${STEPS_CACHE_PATH}" \
+    DRY_RUN=true RUN_ROOT="${RUN_ROOT}/reasoning" \
+    NUM_GPUS="${NUM_GPUS}" MASTER_PORT="${MASTER_PORT}" \
+    STEPS_CACHE_PATH="${STEPS_CACHE_PATH}" WRITE_STEPS_CACHE=false \
+    STAGE1_PER_DEVICE_BATCH="${R4_STAGE1_PER_DEVICE_BATCH:-12}" \
+    STAGE1_GRADIENT_ACCUMULATION="${R4_STAGE1_GRADIENT_ACCUMULATION:-1}" \
+    STAGE2_PER_DEVICE_BATCH="${R4_STAGE2_PER_DEVICE_BATCH:-16}" \
+    STAGE2_GRADIENT_ACCUMULATION="${R4_STAGE2_GRADIENT_ACCUMULATION:-1}" \
       bash "${REPO_ROOT}/scripts/run_libero_multistage.sh" "${COMMON_ARGS[@]}" "${EXTRA_ARGS[@]}"
     stage2_checkpoint="${RUN_ROOT}/reasoning/libero_vlm_stage_4/checkpoints/steps_2000_pytorch_model.pt"
     DRY_RUN=true RUN_ROOT="${RUN_ROOT}/action" \
       PRETRAINED_CKPT="${stage2_checkpoint}" \
-      bash "${REPO_ROOT}/scripts/run_laravla_libero.sh" "${COMMON_ARGS[@]}" "${EXTRA_ARGS[@]}"
+      NUM_GPUS="${NUM_GPUS}" MASTER_PORT="$((MASTER_PORT + 1))" \
+      PER_DEVICE_BATCH_SIZE="${R4_STAGE3_PER_DEVICE_BATCH:-16}" \
+      GRADIENT_ACCUMULATION_STEPS="${R4_STAGE3_GRADIENT_ACCUMULATION:-1}" \
+      bash "${REPO_ROOT}/scripts/run_laravla_libero.sh" \
+        "${COMMON_ARGS[@]}" "${CACHE_ARGS[@]}" "${EXTRA_ARGS[@]}"
     ;;
   distributed-preflight)
     check_paths
@@ -297,7 +310,7 @@ case "${MODE}" in
     PER_DEVICE_BATCH_SIZE="${R4_STAGE3_PER_DEVICE_BATCH:-16}" \
     GRADIENT_ACCUMULATION_STEPS="${R4_STAGE3_GRADIENT_ACCUMULATION:-1}" \
       bash "${REPO_ROOT}/scripts/run_laravla_libero.sh" \
-        "${COMMON_ARGS[@]}" "${EXTRA_ARGS[@]}" \
+        "${COMMON_ARGS[@]}" "${CACHE_ARGS[@]}" "${EXTRA_ARGS[@]}" \
         2>&1 | tee -a "${RUN_ROOT}/action/logs/train.stdout.log"
     status="${PIPESTATUS[0]}"
     set -e
