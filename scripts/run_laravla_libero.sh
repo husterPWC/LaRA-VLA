@@ -17,6 +17,7 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-4000}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-20000000}"
 MIN_SAVE_STEP="${MIN_SAVE_STEP:-16000}"
 PER_DEVICE_BATCH_SIZE="${PER_DEVICE_BATCH_SIZE:-16}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 DRY_RUN="${DRY_RUN:-false}"
 
 if [[ "${DRY_RUN}" != "true" && ( -z "${PRETRAINED_CKPT}" || ! -f "${PRETRAINED_CKPT}" ) ]]; then
@@ -42,6 +43,7 @@ args=(
   --trainer.eval_interval "${EVAL_INTERVAL}"
   --trainer.min_save_step "${MIN_SAVE_STEP}"
   --datasets.vla_data.per_device_batch_size "${PER_DEVICE_BATCH_SIZE}"
+  --trainer.gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS}"
   --framework.img_next.use_teacher false
   --framework.action_model.diffusion_model_cfg.dropout 0.1
   --trainer.pretrained_checkpoint "${PRETRAINED_CKPT}"

@@ -29,7 +29,18 @@ declare -A BRIDGE_STAGE=( [1]=1 [2]=2 [3]=3 [4]=4 )
 declare -A VLM_LOSS_WEIGHT=( [1]=1.0 [2]=1.0 [3]=1.0 [4]=1.0 )
 declare -A IMG_NEXT_LOSS_WEIGHT=( [1]=0.1 [2]=0.2 [3]=0.2 [4]=0.2 )
 
-declare -A PER_DEVICE_BATCH=( [1]=12 [2]=16 [3]=16 [4]=16 )
+declare -A PER_DEVICE_BATCH=(
+  [1]="${STAGE1_PER_DEVICE_BATCH:-12}"
+  [2]="${STAGE2_PER_DEVICE_BATCH:-16}"
+  [3]="${STAGE2_PER_DEVICE_BATCH:-16}"
+  [4]="${STAGE2_PER_DEVICE_BATCH:-16}"
+)
+declare -A GRADIENT_ACCUMULATION=(
+  [1]="${STAGE1_GRADIENT_ACCUMULATION:-1}"
+  [2]="${STAGE2_GRADIENT_ACCUMULATION:-1}"
+  [3]="${STAGE2_GRADIENT_ACCUMULATION:-1}"
+  [4]="${STAGE2_GRADIENT_ACCUMULATION:-1}"
+)
 declare -A MAX_STEPS=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
 
 # 须满足 MAX_STEPS[s] % SAVE_INTERVAL[s] == 0（与 train 存盘条件一致）
@@ -74,6 +85,7 @@ run_one_stage() {
     --trainer.max_train_steps "${MAX_STEPS[$stage]}"
     --trainer.save_interval "${SAVE_INTERVAL[$stage]}"
     --datasets.vla_data.per_device_batch_size "${PER_DEVICE_BATCH[$stage]}"
+    --trainer.gradient_accumulation_steps "${GRADIENT_ACCUMULATION[$stage]}"
     --framework.latent_reasoning.vlm_loss_weight "${VLM_LOSS_WEIGHT[$stage]}"
     --framework.img_next.loss_weight "${IMG_NEXT_LOSS_WEIGHT[$stage]}"
     --framework.img_next.use_teacher "${IMG_NEXT_USE_TEACHER}"

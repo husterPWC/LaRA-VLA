@@ -13,6 +13,8 @@
 
 当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
 [R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
+R4 正式多阶段训练步骤见
+[R4 8 卡官方训练手册](R4_SERVER_TRAINING.md)。
 
 R2 服务器首次并行启动时发现，robosuite 1.4.0 要求
 `MUJOCO_EGL_DEVICE_ID` 是 `CUDA_VISIBLE_DEVICES` 中的物理 GPU ID。旧 wrapper
@@ -539,6 +541,36 @@ Stage II-1 严格加载；三个 Stage II checkpoint 逐段链式加载；Stage 
 metrics、validation、约 10 GB 的阶段 checkpoint 和约 53 GB 的完整 ZeRO
 training state 位于被 Git 忽略的
 `../runs/repro_r3_official_smoke/`，不进入仓库。
+
+## R4 正式训练准备
+
+R4 已完成本地启动链路审计，尚未宣布正式 8 卡训练通过。审计确认：
+
+- 官方 `upstream/main` 仍为 `93b5c03c691e38a3c9e90878e76557009e2df261`，
+  没有需要合并的新上游提交；
+- `run_libero_multistage.sh` 的函数未 `shift 2`，会把内部 stage 号和
+  checkpoint 路径当作孤立 CLI 值，也不会把服务器路径 override 传入各段；
+- 默认 `eval_interval=2000` 的 action L1 在 rank 0 上额外取训练 batch，
+  不是 LIBERO rollout evaluation，还会使 rank 间的 `batches_seen` 不一致；
+- 8 个 rank 首次同时写共享 steps cache 存在竞争，R4 改为单进程预生成、
+  正式训练只读；
+- 服务器 `/data` 审计时只剩约 893 GB，Stage III 不能无界保留
+  大体积 DeepSpeed state。
+
+最小工程修复不改训练目标：
+
+- launcher 现在安全转发 CLI override，支持阶段边界、dry-run 和可移植路径；
+- R4 关闭 rank0-only 训练 batch 伪评估，完整训练后仍按 R2 协议评测；
+- 模型 `.pt` 全部保留；新增可选的完整 resume-state 保留数，R4 只在
+  新 state 完整写入后滚动保留最新两份，默认 `null` 仍保留全部；
+- `scripts/reproduction/run_r4_training.sh` 只封装复现参数，仍调用官方
+  launcher 和同一个 `laravla/training/train.py`。
+
+数据集已从 5163 个 Hugging Face metadata 文件交叉确认 revision 均为
+`fbe4f71c2fd5a6e4f9171c78e51e2f6567277fff`。在全新临时目录生成的四个
+steps cache 与 R3 的 config key、step 数和顺序一致；Stage I/II 已从该
+cache 解码真实图像、action、CoT、bbox 和 FAST token。详细命令和验收标准见
+`docs/R4_SERVER_TRAINING.md`。
 
 ## 修改原则
 

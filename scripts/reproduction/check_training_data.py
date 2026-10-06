@@ -125,6 +125,8 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--fast-tokenizer", type=Path, required=True)
+    parser.add_argument("--steps-cache-path", type=Path)
+    parser.add_argument("--write-steps-cache", action="store_true")
     parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -138,7 +140,18 @@ def main() -> None:
     cfg.datasets.vla_data.bridge_annotations.fast_tokenizer_name = str(
         fast_tokenizer
     )
-    cfg.datasets.vla_data.bridge_annotations.write_steps_cache = False
+    if args.steps_cache_path is not None:
+        steps_cache_path = args.steps_cache_path.resolve()
+        if args.write_steps_cache:
+            steps_cache_path.mkdir(parents=True, exist_ok=True)
+        cfg.datasets.vla_data.bridge_annotations.steps_cache_path = str(
+            steps_cache_path
+        )
+    else:
+        steps_cache_path = None
+    cfg.datasets.vla_data.bridge_annotations.write_steps_cache = bool(
+        args.write_steps_cache
+    )
     cfg.datasets.vla_data.bridge_reasoning.stage = args.stage
     cfg.datasets.vla_data.bridge_reasoning.include_action_tokens = True
 
@@ -161,6 +174,21 @@ def main() -> None:
             "tokenizer_json_sha256": sha256(fast_tokenizer / "tokenizer.json"),
         },
         "stage": args.stage,
+        "steps_cache_path": (
+            str(steps_cache_path) if steps_cache_path is not None else None
+        ),
+        "steps_cache_files": (
+            [
+                {
+                    "name": path.name,
+                    "size": path.stat().st_size,
+                    "sha256": sha256(path),
+                }
+                for path in sorted(steps_cache_path.glob("steps_*.pkl"))
+            ]
+            if steps_cache_path is not None
+            else []
+        ),
         "mixture_length": len(mixture),
         "dataset_sampling_weights": mixture.dataset_sampling_weights.tolist(),
         "samples": samples,
