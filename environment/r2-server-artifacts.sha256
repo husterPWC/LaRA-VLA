@@ -1,0 +1,8 @@
+# R2 server transfer archive (kept outside Git)
+4c81e52be9dbb20384f1b22efe8b167f8b0d8ac459315ec53b45257b71a181f6  ../r2-results.tgz
+# Imported machine-readable results. CSV is normalized from CRLF to LF for Git.
+# Raw server CSV SHA256: e2f7cbe8e63d62f3a90ac3b7ff840f56610ec3e51122ab7f97e0c62b0836d52a
+75006bb42727278f9043ea27193ecbd03b36d75b4b0272ecbb8c332dcfd0ca8f  results/official_checkpoint_libero_eval.json
+674704c6971a6418c06cdbe99230540fcdab4da9d8acf370f32f7d9b0120deaa  results/official_checkpoint_libero_eval.csv
+# Author-released model checkpoint (kept outside Git)
+2fec9c3a35ee8b4d843adf329805e62a7a6cd79a9e1166eff8b19f37a0c6e56f  ../checkpoints/LaRA-VLA-libero/checkpoints/steps_25000_pytorch_model.pt

@@ -6,10 +6,10 @@
 
 - R0：代码、依赖、CUDA、LIBERO 和 EGL 环境验收；
 - R1：使用作者发布 checkpoint 完成真实单卡 LIBERO rollout；
-- R2：在服务器上执行官方 4 suite、2000 rollout 正式评估；
+- R2：已在服务器上完成官方 4 suite、2000 rollout 正式评估；
 - R3：在 R1 通过且服务器 R2 正式评估运行期间，按用户指示并行完成本机
   3090 官方训练链路 smoke；
-- R4：R2 结果验收后再开始 8 卡完整训练。
+- R4：R2/R3 验收完成后进入 8 卡完整训练。
 
 当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
 [R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
@@ -204,6 +204,59 @@ R1 对 evaluator 只增加可选 `task_id`；默认 `None` 保留官方遍历全
 
 构建脚本：`scripts/reproduction/build_dependency_wheels.sh`。native wheel
 是机器相关产物，不进入 Git；8 GPU 服务器必须按真实 GPU 架构重新编译。
+
+## R2 官方 checkpoint 正式评测
+
+**R2 于 2026-10-04 通过。** 本次运行使用作者发布的 checkpoint、
+仓库原有 policy server 和 LIBERO evaluator，按 4 个 suite × 10 个任务
+× 50 次 rollout 的协议完成全部 2000 次 episode。服务器有 8 张 GPU，
+首轮仍按官方并行脚本使用 4 个 policy server，使用当时空闲的物理
+GPU `1,2,6,7`，没有改写 evaluator 来扩展到 8 卡。
+
+- LaRA-VLA commit：`7519721b4debccb5b0259ced3b2cde5888279d6d`；
+- LIBERO commit：`8f1084e3132a39270c3a13ebe37270a43ece2a01`；
+- checkpoint SHA256：
+  `2fec9c3a35ee8b4d843adf329805e62a7a6cd79a9e1166eff8b19f37a0c6e56f`；
+- server：Python 3.10.22、torch 2.6.0+cu124、transformers 4.57.0；
+- client：torch 2.5.1+cpu、NumPy 1.24.4、MuJoCo 2.3.7；
+- 硬件：8 × NVIDIA RTX 5880 Ada Generation 49140 MiB，driver 595.91.07；
+- 未保存 rollout 视频，不影响评测逻辑。
+
+| 结果 | Spatial | Goal | Object | Long / LIBERO-10 | 平均 |
+|---|---:|---:|---:|---:|---:|
+| 本次官方 checkpoint | 99.0 | 97.6 | 99.4 | 94.2 | 97.55 |
+| 论文报告 | 96.4 | 98.6 | 99.8 | 96.6 | 97.9 |
+| 差值（本次 - 论文） | +2.6 | -1.0 | -0.4 | -2.4 | -0.35 |
+
+各 suite 分别为 Spatial 495/500、Goal 488/500、Object 497/500、
+LIBERO-10 471/500，合计 1951/2000。四个 suite 的 episode 数、任务数、
+任务成功数之和与 suite 汇总已交叉校验；macro 和 micro 平均在每个
+suite 均为 500 次 rollout 时均为 97.55%。总体与论文只差 0.35 个百分点，
+达到作者 checkpoint 复现验收标准；Long 低 2.4 个百分点，差异集中在
+`put both moka pots on the stove` 和
+`put the yellow and white mug in the microwave and close it`，两个任务均为
+45/50。Goal 中最低的 `put the bowl on top of the cabinet` 为 44/50。
+这些是对当次 50 个初始状态试验的定位结果，不据此改动模型。
+
+四个 client 都先打印 `Total episodes: 500` 和最终成功率，并且并行脚本
+返回 `LIBERO parallel evaluation complete`。进程退出时，robosuite 的 EGL
+析构器二次释放 context，因此四个 client 均打印 `Exception ignored`，发生在
+最终统计之后。`libero_10` 还在完整 500 次结果之后打印一次
+MuJoCo `QACC` 数值告警。两者均未中断 rollout、未使汇总缺失，也未被
+源码补丁隐藏。
+
+可审查证据：
+
+- `results/official_checkpoint_libero_eval.json`：40 个任务的完整结果；
+- `results/official_checkpoint_libero_eval.csv`：suite 级摘要；
+- `environment/r2-server-run.env`：实际 commit、checkpoint、GPU 和协议；
+- `environment/r2-server-system-info.txt`：服务器软硬件快照；
+- `environment/r2-server-artifacts.sha256`：原始转存包与结果哈希。
+
+服务器的原始 evaluator 日志和 GPU 采样属于大体积运行产物，留在
+Git 外。本机收到的 `r2-results.tgz` 不进入 Git，其 SHA256 已锁定。
+结果 CSV 纳入 Git 时只将 CRLF 行尾规范为 LF；原始 CSV 哈希也保留在哈希
+清单中，数值和字段未改变。
 
 ## 后续阶段需要持续追踪的问题
 

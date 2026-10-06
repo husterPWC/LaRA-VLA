@@ -1,0 +1,65 @@
+2026-10-04T12:39:18+08:00
+5880-1
+Linux 5880-1 6.8.0-40-generic #40~22.04.3-Ubuntu SMP PREEMPT_DYNAMIC Tue Jul 30 17:30:19 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+Sun Oct  4 12:39:18 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.91.07              Driver Version: 595.91.07      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:01:00.0 Off |                  Off |
+| 30%   30C    P8             22W /  285W |    1937MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:21:00.0 Off |                  Off |
+| 30%   29C    P8             26W /  285W |      19MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:41:00.0 Off |                  Off |
+| 30%   45C    P2            102W /  285W |    6345MiB /  49140MiB |     77%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:61:00.0 Off |                  Off |
+| 30%   58C    P2            235W /  285W |   14517MiB /  49140MiB |    100%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:81:00.0 Off |                  Off |
+| 30%   46C    P2            103W /  285W |    6135MiB /  49140MiB |     87%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:A1:00.0 Off |                  Off |
+| 30%   58C    P2            239W /  285W |   14321MiB /  49140MiB |     87%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   6  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:C1:00.0 Off |                  Off |
+| 30%   30C    P8             24W /  285W |      20MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+|   7  NVIDIA RTX 5880 Ada Gene...    Off |   00000000:E1:00.0 Off |                  Off |
+| 30%   29C    P8             21W /  285W |      20MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    0   N/A  N/A         1358544    C+G   ...ac-sim/kit/python/bin/python3       1886MiB |
+|    1   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    2   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    2   N/A  N/A         1378188    C+G   ...ac-sim/kit/python/bin/python3       6293MiB |
+|    3   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    3   N/A  N/A         1329332      C   ...conda3/envs/lfyolo/bin/python      14398MiB |
+|    4   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    4   N/A  N/A         1379663    C+G   ...ac-sim/kit/python/bin/python3       6078MiB |
+|    5   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    5   N/A  N/A         1329333      C   ...conda3/envs/lfyolo/bin/python      14208MiB |
+|    6   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
+|    7   N/A  N/A            4866      G   /usr/lib/xorg/Xorg                        4MiB |
++-----------------------------------------------------------------------------------------+
+server python/torch/transformers 2.6.0+cu124 12.4 4.57.0
+client torch/numpy/mujoco 2.5.1+cpu 1.24.4 2.3.7

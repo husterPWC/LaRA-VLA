@@ -1,0 +1,333 @@
+{
+  "protocol": {
+    "suites": [
+      "libero_spatial",
+      "libero_goal",
+      "libero_object",
+      "libero_10"
+    ],
+    "tasks_per_suite": 10,
+    "rollouts_per_task": 50,
+    "expected_total_rollouts": 2000
+  },
+  "suites": {
+    "libero_spatial": {
+      "tasks": [
+        {
+          "task": "pick up the black bowl between the plate and the ramekin and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl next to the ramekin and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl from table center and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl on the cookie box and place it on the plate",
+          "episodes": 50,
+          "successes": 48,
+          "success_rate": 0.96,
+          "success_percent": 96.0
+        },
+        {
+          "task": "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "pick up the black bowl on the ramekin and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl next to the cookie box and place it on the plate",
+          "episodes": 50,
+          "successes": 48,
+          "success_rate": 0.96,
+          "success_percent": 96.0
+        },
+        {
+          "task": "pick up the black bowl on the stove and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl next to the plate and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the black bowl on the wooden cabinet and place it on the plate",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        }
+      ],
+      "episodes": 500,
+      "successes": 495,
+      "success_rate": 0.99,
+      "success_percent": 99.0
+    },
+    "libero_goal": {
+      "tasks": [
+        {
+          "task": "open the middle drawer of the cabinet",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "put the bowl on the stove",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "put the wine bottle on top of the cabinet",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "open the top drawer and put the bowl inside",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "put the bowl on top of the cabinet",
+          "episodes": 50,
+          "successes": 44,
+          "success_rate": 0.88,
+          "success_percent": 88.0
+        },
+        {
+          "task": "push the plate to the front of the stove",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "put the cream cheese in the bowl",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "turn on the stove",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "put the bowl on the plate",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "put the wine bottle on the rack",
+          "episodes": 50,
+          "successes": 48,
+          "success_rate": 0.96,
+          "success_percent": 96.0
+        }
+      ],
+      "episodes": 500,
+      "successes": 488,
+      "success_rate": 0.976,
+      "success_percent": 97.6
+    },
+    "libero_object": {
+      "tasks": [
+        {
+          "task": "pick up the alphabet soup and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the cream cheese and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the salad dressing and place it in the basket",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "pick up the bbq sauce and place it in the basket",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "pick up the ketchup and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the tomato sauce and place it in the basket",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "pick up the butter and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the milk and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the chocolate pudding and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        },
+        {
+          "task": "pick up the orange juice and place it in the basket",
+          "episodes": 50,
+          "successes": 50,
+          "success_rate": 1.0,
+          "success_percent": 100.0
+        }
+      ],
+      "episodes": 500,
+      "successes": 497,
+      "success_rate": 0.994,
+      "success_percent": 99.4
+    },
+    "libero_10": {
+      "tasks": [
+        {
+          "task": "put both the alphabet soup and the tomato sauce in the basket",
+          "episodes": 50,
+          "successes": 48,
+          "success_rate": 0.96,
+          "success_percent": 96.0
+        },
+        {
+          "task": "put both the cream cheese box and the butter in the basket",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "turn on the stove and put the moka pot on it",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+          "episodes": 50,
+          "successes": 47,
+          "success_rate": 0.94,
+          "success_percent": 94.0
+        },
+        {
+          "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+          "episodes": 50,
+          "successes": 47,
+          "success_rate": 0.94,
+          "success_percent": 94.0
+        },
+        {
+          "task": "pick up the book and place it in the back compartment of the caddy",
+          "episodes": 50,
+          "successes": 46,
+          "success_rate": 0.92,
+          "success_percent": 92.0
+        },
+        {
+          "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+          "episodes": 50,
+          "successes": 46,
+          "success_rate": 0.92,
+          "success_percent": 92.0
+        },
+        {
+          "task": "put both the alphabet soup and the cream cheese box in the basket",
+          "episodes": 50,
+          "successes": 49,
+          "success_rate": 0.98,
+          "success_percent": 98.0
+        },
+        {
+          "task": "put both moka pots on the stove",
+          "episodes": 50,
+          "successes": 45,
+          "success_rate": 0.9,
+          "success_percent": 90.0
+        },
+        {
+          "task": "put the yellow and white mug in the microwave and close it",
+          "episodes": 50,
+          "successes": 45,
+          "success_rate": 0.9,
+          "success_percent": 90.0
+        }
+      ],
+      "episodes": 500,
+      "successes": 471,
+      "success_rate": 0.942,
+      "success_percent": 94.2
+    }
+  },
+  "macro_average_success_rate": 0.9755,
+  "macro_average_success_percent": 97.55,
+  "total_episodes": 2000,
+  "total_successes": 1951,
+  "micro_success_rate": 0.9755,
+  "micro_success_percent": 97.55
+}

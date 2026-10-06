@@ -1,0 +1,6 @@
+suite,episodes,successes,success_percent
+libero_spatial,500,495,99.0000
+libero_goal,500,488,97.6000
+libero_object,500,497,99.4000
+libero_10,500,471,94.2000
+macro_average,2000,1951,97.5500
