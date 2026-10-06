@@ -108,6 +108,7 @@ trainer:
   is_resume: false
   resume_from_checkpoint: null
   save_training_state: true
+  max_training_state_checkpoints: null
   save_final_model: true
   max_train_steps: 60000
   epochs: null

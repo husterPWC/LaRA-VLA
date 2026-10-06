@@ -14,6 +14,8 @@ Supports VLM loss computation and img_next alignment loss.
 import argparse
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 from typing import Tuple
 from torch.utils.data import DataLoader
@@ -456,7 +458,39 @@ class LaRA_VLA_Trainer(TrainerUtils):
             )
             if save_training_state:
                 self.accelerator.print(f"✅ Training state saved at {state_path}")
+                self._prune_training_states()
         self.accelerator.wait_for_everyone()
+
+    def _prune_training_states(self):
+        """Keep only the newest complete resume states when a limit is set."""
+        keep = self.config.trainer.get(
+            "max_training_state_checkpoints", None
+        )
+        if keep is None:
+            return
+        keep = int(keep)
+        if keep < 1:
+            raise ValueError(
+                "trainer.max_training_state_checkpoints must be >= 1 or null"
+            )
+
+        completed_states = []
+        for path in Path(self.checkpoint_dir).glob(
+            "steps_*_training_state"
+        ):
+            match = re.fullmatch(
+                r"steps_(\d+)_training_state", path.name
+            )
+            if match and (path / "trainer_state.json").is_file():
+                completed_states.append((int(match.group(1)), path))
+
+        completed_states.sort(reverse=True)
+        for _, old_path in completed_states[keep:]:
+            shutil.rmtree(old_path)
+            self.accelerator.print(
+                "Removed old complete training state due to retention: "
+                f"{old_path}"
+            )
 
     def _log_metrics(self, metrics):
         """record training metrics"""
