@@ -91,23 +91,15 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
 
 共享服务器采用 4 卡配置时，在查看 `nvidia-smi` 后选择四张能长期保留的空闲卡。
-例如选中物理 GPU `0,4,6,7` 时覆盖：
+例如选中物理 GPU `0,4,6,7` 时执行：
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0,4,6,7
-export R4_NUM_GPUS=4
-export R4_PREFLIGHT_PER_DEVICE_BATCH=12
-export R4_PREFLIGHT_GRADIENT_ACCUMULATION=2
-export R4_STAGE1_PER_DEVICE_BATCH=12
-export R4_STAGE1_GRADIENT_ACCUMULATION=2
-export R4_STAGE2_PER_DEVICE_BATCH=16
-export R4_STAGE2_GRADIENT_ACCUMULATION=2
-export R4_STAGE3_PER_DEVICE_BATCH=16
-export R4_STAGE3_GRADIENT_ACCUMULATION=2
+source scripts/reproduction/setup_r4_4gpu_env.sh 0,4,6,7
 ```
 
 这里的 GPU 编号只是示例，必须按启动时的实际空闲卡替换。包装脚本会验证所选
-GPU 数量、启动前显存占用以及三个阶段的 effective global batch。
+GPU 数量、启动前显存占用以及三个阶段的 effective global batch。每次进入新
+终端或 tmux 都重新 source 一次该脚本。
 
 同步代码：
 
