@@ -149,7 +149,12 @@ def prepare_data(cfg, accelerator, output_dir) -> Tuple[DataLoader, DataLoader]:
 
     accelerator.dataloader_config.dispatch_batches = False
     if dist.is_available() and dist.is_initialized():
-        dist.barrier()
+        if dist.get_backend() == "nccl" and torch.cuda.is_available():
+            local_device = accelerator.local_process_index
+            torch.cuda.set_device(local_device)
+            dist.barrier(device_ids=[local_device])
+        else:
+            dist.barrier()
 
     return vla_train_dataloader
 

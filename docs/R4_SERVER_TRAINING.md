@@ -208,8 +208,12 @@ scripts/reproduction/run_r4_training.sh dry-run \
 这一步使用正式 Stage I 模型、数据、forward、loss、backward、optimizer
 和 checkpoint，只将 optimizer step 缩短为 1：
 
-启动前 8 张训练 GPU 应由本次实验独占。包装脚本默认要求每张卡已用显存不超过
+启动前所选训练 GPU 应由本次实验独占。包装脚本默认要求每张卡已用显存不超过
 1024 MiB；这是启动保护线，不是模型或论文超参数。
+
+首次 NCCL barrier 显式绑定 `accelerator.local_process_index`。这是为了让
+`CUDA_VISIBLE_DEVICES` 选择非连续物理 GPU（例如 `0,2,6,7`）时仍使用对应的
+逻辑设备 `0,1,2,3`，避免 ProcessGroupNCCL 在尚未记录设备映射时推测设备。
 
 ```bash
 tmux new -s lara-r4
