@@ -85,7 +85,7 @@ check_paths() {
   }
 }
 
-check_gpus() {
+check_gpu_topology() {
   command -v nvidia-smi >/dev/null
   command -v torchrun >/dev/null
   local count
@@ -94,12 +94,19 @@ check_gpus() {
     echo "可见 GPU 数量为 ${count}，期望 ${NUM_GPUS}" >&2
     exit 1
   }
-  local gpu used
+  local -a visible_gpus
   IFS=',' read -r -a visible_gpus <<< "${CUDA_VISIBLE_DEVICES}"
   [[ "${#visible_gpus[@]}" -eq "${NUM_GPUS}" ]] || {
     echo "CUDA_VISIBLE_DEVICES 与 R4_NUM_GPUS 数量不一致" >&2
     exit 1
   }
+}
+
+check_gpus_idle() {
+  check_gpu_topology
+  local gpu used
+  local -a visible_gpus
+  IFS=',' read -r -a visible_gpus <<< "${CUDA_VISIBLE_DEVICES}"
   for gpu in "${visible_gpus[@]}"; do
     used="$(nvidia-smi -i "${gpu}" --query-gpu=memory.used --format=csv,noheader,nounits | tr -d ' ')"
     if (( used > MAX_IDLE_MEMORY_MIB )); then
@@ -201,7 +208,7 @@ run_reasoning() {
 case "${MODE}" in
   preflight)
     check_paths
-    check_gpus
+    check_gpu_topology
     mkdir -p "${RUN_ROOT}/preflight" "${STEPS_CACHE_PATH}" "${HF_HOME}" "${TORCH_EXTENSIONS_DIR}"
     "${PYTHON_BIN}" -m pip check
     "${PYTHON_BIN}" "${REPO_ROOT}/scripts/reproduction/verify_r4_assets.py" \
@@ -243,7 +250,7 @@ case "${MODE}" in
     ;;
   distributed-preflight)
     check_paths
-    check_gpus
+    check_gpus_idle
     check_steps_cache
     write_metadata distributed-preflight
     START_STAGE=1 END_STAGE=1 \
@@ -259,7 +266,7 @@ case "${MODE}" in
     ;;
   distributed-resume-preflight)
     check_paths
-    check_gpus
+    check_gpus_idle
     check_steps_cache
     resume_state="${RUN_ROOT}/distributed_preflight/libero_vlm_stage_1/checkpoints/steps_1_training_state"
     [[ -f "${resume_state}/trainer_state.json" ]] || {
@@ -282,7 +289,7 @@ case "${MODE}" in
     ;;
   reasoning)
     check_paths
-    check_gpus
+    check_gpus_idle
     check_steps_cache
     check_effective_batch Stage-I "${R4_STAGE1_PER_DEVICE_BATCH:-12}" "${R4_STAGE1_GRADIENT_ACCUMULATION:-1}" 96
     check_effective_batch Stage-II "${R4_STAGE2_PER_DEVICE_BATCH:-16}" "${R4_STAGE2_GRADIENT_ACCUMULATION:-1}" 128
@@ -296,7 +303,7 @@ case "${MODE}" in
     ;;
   stage3)
     check_paths
-    check_gpus
+    check_gpus_idle
     check_steps_cache
     check_effective_batch Stage-III "${R4_STAGE3_PER_DEVICE_BATCH:-16}" "${R4_STAGE3_GRADIENT_ACCUMULATION:-1}" 128
     write_metadata stage3

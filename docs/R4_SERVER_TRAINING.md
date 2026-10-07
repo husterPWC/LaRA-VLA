@@ -115,7 +115,8 @@ hf download physical-intelligence/fast \
 
 ## 第一步：数据与环境预检
 
-在所有 8 张 GPU 空闲时执行：
+该步骤不执行模型训练，8 张 GPU 需要全部可见，但无需空闲。后续分布式预检和
+正式训练才要求所有训练 GPU 空闲。
 
 先单独验证刚传输的两个目录（读取约 2.1 GB）：
 
@@ -148,7 +149,7 @@ scripts/reproduction/run_r4_training.sh preflight \
 预检必须完成：
 
 - worktree 干净；
-- 恰好 8 张可见 GPU，每张启动前占用不超过 1024 MiB；
+- 恰好 8 张可见 GPU；
 - `pip check` 通过；
 - dataset revision 恰好为锁定 revision；
 - 四个 suite 都能解码真实图像和 8×7 action；
@@ -177,6 +178,9 @@ scripts/reproduction/run_r4_training.sh dry-run \
 
 这一步使用正式 Stage I 模型、数据、forward、loss、backward、optimizer
 和 checkpoint，只将 optimizer step 缩短为 1：
+
+启动前 8 张训练 GPU 应由本次实验独占。包装脚本默认要求每张卡已用显存不超过
+1024 MiB；这是启动保护线，不是模型或论文超参数。
 
 ```bash
 tmux new -s lara-r4
