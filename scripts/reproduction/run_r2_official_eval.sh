@@ -8,6 +8,13 @@ set -euo pipefail
 : "${LARA_CHECKPOINT:?Set LARA_CHECKPOINT to the prepared checkpoint path}"
 : "${R2_RUN_ROOT:?Set R2_RUN_ROOT to an output directory outside Git}"
 : "${CUDA_VISIBLE_DEVICES:?Expose exactly four GPUs for the official first run}"
+RESULT_PREFIX="${RESULT_PREFIX:-official_checkpoint}"
+EVAL_LABEL="${EVAL_LABEL:-R2}"
+
+if [[ ! "${RESULT_PREFIX}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "RESULT_PREFIX 只能包含字母、数字、下划线和连字符: ${RESULT_PREFIX}" >&2
+  exit 2
+fi
 
 IFS=',' read -r -a gpu_ids <<< "${CUDA_VISIBLE_DEVICES}"
 if [[ "${#gpu_ids[@]}" -ne 4 ]]; then
@@ -74,6 +81,7 @@ mujoco_egl_device_id=${MUJOCO_EGL_DEVICE_ID}
 task_suites=libero_goal,libero_spatial,libero_object,libero_10
 rollouts_per_task=50
 save_videos=false
+result_prefix=${RESULT_PREFIX}
 EOF
 
 {
@@ -118,8 +126,8 @@ fi
 "${LARAVLA_PYTHON}" "${script_dir}/summarize_libero_eval.py" \
   --log-dir "${eval_dir}/logs" \
   --expected-rollouts-per-task 50 \
-  --output-json "${R2_RUN_ROOT}/official_checkpoint_libero_eval.json" \
-  --output-csv "${R2_RUN_ROOT}/official_checkpoint_libero_eval.csv" \
+  --output-json "${R2_RUN_ROOT}/${RESULT_PREFIX}_libero_eval.json" \
+  --output-csv "${R2_RUN_ROOT}/${RESULT_PREFIX}_libero_eval.csv" \
   > "${R2_RUN_ROOT}/summary.stdout.log"
 
-echo "R2 PASS: ${R2_RUN_ROOT}"
+echo "${EVAL_LABEL} PASS: ${R2_RUN_ROOT}"

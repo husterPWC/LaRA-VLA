@@ -301,6 +301,34 @@ scripts/reproduction/run_r4_training.sh stage3 \
   2>&1 | tee "$REPRO_ROOT/r4-stage3.stdout.log"
 ```
 
+最终 checkpoint 为：
+
+```text
+$R4_RUN_ROOT/action/libero_all_vla/checkpoints/steps_40000_pytorch_model.pt
+```
+
+## 第六步：重训 checkpoint 正式评估
+
+训练完成后复用 R2 已验收的四 suite、每任务 50 rollouts 协议。评估需要四张
+空闲 GPU，但不要求与训练使用相同的物理编号：
+
+```bash
+export LARA_CHECKPOINT="$R4_RUN_ROOT/action/libero_all_vla/checkpoints/steps_40000_pytorch_model.pt"
+export LIBERO_HOME="$REPRO_ROOT/LIBERO"
+export LIBERO_PYTHON="/data/peixingxing/miniconda3/envs/libero/bin/python"
+export RESULT_PREFIX=reproduced_checkpoint
+export EVAL_LABEL=R4_REPRODUCED_CHECKPOINT
+export R2_RUN_ROOT="$REPRO_ROOT/runs/r4-reproduced-eval-$(date +%Y%m%d-%H%M%S)"
+export MUJOCO_EGL_DEVICE_ID="${CUDA_VISIBLE_DEVICES%%,*}"
+
+scripts/reproduction/run_r2_official_eval.sh \
+  2>&1 | tee "$R2_RUN_ROOT.launch.log"
+```
+
+成功后结果位于 `reproduced_checkpoint_libero_eval.json` 和
+`reproduced_checkpoint_libero_eval.csv`，再与 R2 官方 checkpoint 和论文结果
+放入同一张表。
+
 脚本固定从以下 Stage II 最终权重加载 Qwen 接口：
 
 ```text
