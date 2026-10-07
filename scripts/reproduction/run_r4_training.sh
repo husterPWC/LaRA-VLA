@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
-  echo "用法: $0 {preflight|dry-run|distributed-preflight|distributed-resume-preflight|reasoning|stage3} [额外训练参数]" >&2
+  echo "用法: $0 {preflight|dry-run|distributed-preflight|distributed-resume-preflight|distributed-capacity-preflight|reasoning|stage3} [额外训练参数]" >&2
   exit 2
 fi
 shift
@@ -143,6 +143,14 @@ write_metadata() {
     echo "fast_tokenizer_sha256=$(sha256sum "${FAST_TOKENIZER}/tokenizer.json" | awk '{print $1}')"
     echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES}"
     echo "num_gpus=${NUM_GPUS}"
+    echo "preflight_per_device_batch=${R4_PREFLIGHT_PER_DEVICE_BATCH:-12}"
+    echo "preflight_gradient_accumulation=${R4_PREFLIGHT_GRADIENT_ACCUMULATION:-1}"
+    echo "stage1_per_device_batch=${R4_STAGE1_PER_DEVICE_BATCH:-12}"
+    echo "stage1_gradient_accumulation=${R4_STAGE1_GRADIENT_ACCUMULATION:-1}"
+    echo "stage2_per_device_batch=${R4_STAGE2_PER_DEVICE_BATCH:-16}"
+    echo "stage2_gradient_accumulation=${R4_STAGE2_GRADIENT_ACCUMULATION:-1}"
+    echo "stage3_per_device_batch=${R4_STAGE3_PER_DEVICE_BATCH:-16}"
+    echo "stage3_gradient_accumulation=${R4_STAGE3_GRADIENT_ACCUMULATION:-1}"
     echo "zero_stage=${ZERO_STAGE}"
     echo "gradient_checkpointing=${GRADIENT_CHECKPOINTING}"
     echo "state_retention=${STATE_RETENTION}"
@@ -231,6 +239,9 @@ case "${MODE}" in
     echo "R4 PREFLIGHT PASS: ${RUN_ROOT}/preflight"
     ;;
   dry-run)
+    check_effective_batch Stage-I "${R4_STAGE1_PER_DEVICE_BATCH:-12}" "${R4_STAGE1_GRADIENT_ACCUMULATION:-1}" 96
+    check_effective_batch Stage-II "${R4_STAGE2_PER_DEVICE_BATCH:-16}" "${R4_STAGE2_GRADIENT_ACCUMULATION:-1}" 128
+    check_effective_batch Stage-III "${R4_STAGE3_PER_DEVICE_BATCH:-16}" "${R4_STAGE3_GRADIENT_ACCUMULATION:-1}" 128
     DRY_RUN=true RUN_ROOT="${RUN_ROOT}/reasoning" \
     NUM_GPUS="${NUM_GPUS}" MASTER_PORT="${MASTER_PORT}" \
     STEPS_CACHE_PATH="${STEPS_CACHE_PATH}" WRITE_STEPS_CACHE=false \
@@ -252,6 +263,7 @@ case "${MODE}" in
     check_paths
     check_gpus_idle
     check_steps_cache
+    check_effective_batch Stage-I "${R4_PREFLIGHT_PER_DEVICE_BATCH:-12}" "${R4_PREFLIGHT_GRADIENT_ACCUMULATION:-1}" 96
     write_metadata distributed-preflight
     START_STAGE=1 END_STAGE=1 \
     STAGE1_PER_DEVICE_BATCH="${R4_PREFLIGHT_PER_DEVICE_BATCH:-12}" \
@@ -268,6 +280,7 @@ case "${MODE}" in
     check_paths
     check_gpus_idle
     check_steps_cache
+    check_effective_batch Stage-I "${R4_PREFLIGHT_PER_DEVICE_BATCH:-12}" "${R4_PREFLIGHT_GRADIENT_ACCUMULATION:-1}" 96
     resume_state="${RUN_ROOT}/distributed_preflight/libero_vlm_stage_1/checkpoints/steps_1_training_state"
     [[ -f "${resume_state}/trainer_state.json" ]] || {
       echo "缺少分布式预检状态: ${resume_state}" >&2
@@ -286,6 +299,56 @@ case "${MODE}" in
         --trainer.resume_from_checkpoint "${resume_state}" \
         --trainer.max_training_state_checkpoints 1 \
         "${EXTRA_ARGS[@]}"
+    ;;
+  distributed-capacity-preflight)
+    check_paths
+    check_gpus_idle
+    check_steps_cache
+    stage1_batch="${R4_CAPACITY_STAGE1_PER_DEVICE_BATCH:-${R4_STAGE1_PER_DEVICE_BATCH:-12}}"
+    stage1_accumulation="${R4_CAPACITY_STAGE1_GRADIENT_ACCUMULATION:-${R4_STAGE1_GRADIENT_ACCUMULATION:-1}}"
+    stage2_batch="${R4_CAPACITY_STAGE2_PER_DEVICE_BATCH:-${R4_STAGE2_PER_DEVICE_BATCH:-16}}"
+    stage2_accumulation="${R4_CAPACITY_STAGE2_GRADIENT_ACCUMULATION:-${R4_STAGE2_GRADIENT_ACCUMULATION:-1}}"
+    stage3_batch="${R4_CAPACITY_STAGE3_PER_DEVICE_BATCH:-${R4_STAGE3_PER_DEVICE_BATCH:-16}}"
+    stage3_accumulation="${R4_CAPACITY_STAGE3_GRADIENT_ACCUMULATION:-${R4_STAGE3_GRADIENT_ACCUMULATION:-1}}"
+    check_effective_batch Stage-I "${stage1_batch}" "${stage1_accumulation}" 96
+    check_effective_batch Stage-II "${stage2_batch}" "${stage2_accumulation}" 128
+    check_effective_batch Stage-III "${stage3_batch}" "${stage3_accumulation}" 128
+    write_metadata distributed-capacity-preflight
+    capacity_root="${RUN_ROOT}/distributed_capacity"
+    START_STAGE=1 END_STAGE=4 \
+    STAGE1_PER_DEVICE_BATCH="${stage1_batch}" \
+    STAGE1_GRADIENT_ACCUMULATION="${stage1_accumulation}" \
+    STAGE2_PER_DEVICE_BATCH="${stage2_batch}" \
+    STAGE2_GRADIENT_ACCUMULATION="${stage2_accumulation}" \
+    STAGE1_MAX_STEPS=1 STAGE2_MAX_STEPS=1 \
+    STAGE3_MAX_STEPS=1 STAGE4_MAX_STEPS=1 \
+      run_reasoning "${capacity_root}/reasoning" \
+        --trainer.min_save_step 0 \
+        --trainer.logging_frequency 1 \
+        --trainer.save_training_state false \
+        "${EXTRA_ARGS[@]}"
+    stage2_checkpoint="${capacity_root}/reasoning/libero_vlm_stage_4/checkpoints/steps_1_pytorch_model.pt"
+    mkdir -p "${capacity_root}/action/logs"
+    set +e
+    RUN_ROOT="${capacity_root}/action" \
+    PRETRAINED_CKPT="${stage2_checkpoint}" \
+    NUM_GPUS="${NUM_GPUS}" \
+    MASTER_PORT="$((MASTER_PORT + 1))" \
+    MAX_TRAIN_STEPS=1 SAVE_INTERVAL=1 MIN_SAVE_STEP=0 \
+    PER_DEVICE_BATCH_SIZE="${stage3_batch}" \
+    GRADIENT_ACCUMULATION_STEPS="${stage3_accumulation}" \
+      bash "${REPO_ROOT}/scripts/run_laravla_libero.sh" \
+        "${COMMON_ARGS[@]}" "${CACHE_ARGS[@]}" \
+        --trainer.logging_frequency 1 \
+        --trainer.save_training_state false \
+        "${EXTRA_ARGS[@]}" \
+        2>&1 | tee -a "${capacity_root}/action/logs/train.stdout.log"
+    status="${PIPESTATUS[0]}"
+    set -e
+    if (( status == 0 )); then
+      echo "R4 DISTRIBUTED CAPACITY PREFLIGHT PASS: ${capacity_root}"
+    fi
+    exit "${status}"
     ;;
   reasoning)
     check_paths

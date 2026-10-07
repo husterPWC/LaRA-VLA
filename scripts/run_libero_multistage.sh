@@ -41,13 +41,28 @@ declare -A GRADIENT_ACCUMULATION=(
   [3]="${STAGE2_GRADIENT_ACCUMULATION:-1}"
   [4]="${STAGE2_GRADIENT_ACCUMULATION:-1}"
 )
-declare -A MAX_STEPS=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
+declare -A MAX_STEPS=(
+  [1]="${STAGE1_MAX_STEPS:-5000}"
+  [2]="${STAGE2_MAX_STEPS:-2000}"
+  [3]="${STAGE3_MAX_STEPS:-2000}"
+  [4]="${STAGE4_MAX_STEPS:-2000}"
+)
 
 # 须满足 MAX_STEPS[s] % SAVE_INTERVAL[s] == 0（与 train 存盘条件一致）
-declare -A SAVE_INTERVAL=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
+declare -A SAVE_INTERVAL=(
+  [1]="${STAGE1_SAVE_INTERVAL:-${MAX_STEPS[1]}}"
+  [2]="${STAGE2_SAVE_INTERVAL:-${MAX_STEPS[2]}}"
+  [3]="${STAGE3_SAVE_INTERVAL:-${MAX_STEPS[3]}}"
+  [4]="${STAGE4_SAVE_INTERVAL:-${MAX_STEPS[4]}}"
+)
 
 # 第 s 阶段结束时文件名 steps_<CKPT_STEP[s]>_pytorch_model.pt 中的步数
-declare -A CKPT_STEP=( [1]=5000 [2]=2000 [3]=2000 [4]=2000 )
+declare -A CKPT_STEP=(
+  [1]="${STAGE1_CKPT_STEP:-${MAX_STEPS[1]}}"
+  [2]="${STAGE2_CKPT_STEP:-${MAX_STEPS[2]}}"
+  [3]="${STAGE3_CKPT_STEP:-${MAX_STEPS[3]}}"
+  [4]="${STAGE4_CKPT_STEP:-${MAX_STEPS[4]}}"
+)
 
 START_STAGE="${START_STAGE:-1}"
 END_STAGE="${END_STAGE:-4}"

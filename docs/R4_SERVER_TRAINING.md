@@ -1,4 +1,4 @@
-# R4：8 卡官方多阶段训练手册
+# R4：官方多阶段训练手册（8 卡基线与 4 卡资源适配）
 
 本手册只运行官方 LaRA-VLA、官方 LIBERO LeRobot 数据和已验证的正式
 forward。不使用小模型、假数据、dummy action 或简化 loss。
@@ -55,6 +55,24 @@ teacher。Stage III 只从 Stage II 最终 checkpoint 加载 `qwen_vl_interface`
 
 如仍不足，开启 gradient checkpointing；不改模型、数据、loss 或阶段步数。
 
+## 共享服务器的固定 4 卡配置
+
+论文基线使用 8 卡。若服务器长期只能稳定取得 4 张卡，可以固定使用 4 个
+DDP rank，并通过 gradient accumulation 保持相同的 effective global batch：
+
+| 阶段 | 每卡 batch | accumulation | 4 卡全局 batch |
+|---|---:|---:|---:|
+| Stage I | 12 | 2 | 96 |
+| Stage II / III | 16 | 2 | 128 |
+
+如果 48 GB 显存真实 OOM，保留原始日志后改为 Stage I `6 × 4 × 4 = 96`、
+Stage II/III `8 × 4 × 4 = 128`，并开启 gradient checkpointing。该运行应在结果
+中标记为 `4×RTX 5880 resource-adapted reproduction`，不能描述成同硬件的
+`8×H100` 复现。
+
+同一次完整训练及其 training-state resume 必须保持 world size 为 4。恢复时可
+更换物理 GPU 编号，但不能在 4、6、8 个 rank 之间切换。
+
 ## 服务器基础变量
 
 ```bash
@@ -71,6 +89,25 @@ export LARA_FAST_TOKENIZER="$REPRO_ROOT/dependencies/physical-intelligence-fast/
 export R4_RUN_ROOT="$REPRO_ROOT/runs/repro_r4_official"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
+
+共享服务器采用 4 卡配置时，在查看 `nvidia-smi` 后选择四张能长期保留的空闲卡。
+例如选中物理 GPU `0,4,6,7` 时覆盖：
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,4,6,7
+export R4_NUM_GPUS=4
+export R4_PREFLIGHT_PER_DEVICE_BATCH=12
+export R4_PREFLIGHT_GRADIENT_ACCUMULATION=2
+export R4_STAGE1_PER_DEVICE_BATCH=12
+export R4_STAGE1_GRADIENT_ACCUMULATION=2
+export R4_STAGE2_PER_DEVICE_BATCH=16
+export R4_STAGE2_GRADIENT_ACCUMULATION=2
+export R4_STAGE3_PER_DEVICE_BATCH=16
+export R4_STAGE3_GRADIENT_ACCUMULATION=2
+```
+
+这里的 GPU 编号只是示例，必须按启动时的实际空闲卡替换。包装脚本会验证所选
+GPU 数量、启动前显存占用以及三个阶段的 effective global batch。
 
 同步代码：
 
@@ -155,7 +192,7 @@ scripts/reproduction/run_r4_training.sh preflight \
 - 四个 suite 都能解码真实图像和 8×7 action；
 - Stage 1–4 分别生成 0/1/2/3 个 thinking token；
 - CoT、bbox、FAST action token 和 16 个 `<img_next>` 存在；
-- 单进程生成 4 个 steps cache，后续 8 卡训练只读这些 cache。
+- 单进程生成 4 个 steps cache，后续分布式训练只读这些 cache。
 
 预检结果保存在：
 
@@ -174,7 +211,7 @@ scripts/reproduction/run_r4_training.sh dry-run \
 该命令不创建训练目录，应输出 Stage 1、2、3、4 和 Stage III 共五行完整
 `torchrun` 命令。逐项确认路径、steps、batch、loss weight 和 checkpoint 链。
 
-## 第三步：8 卡分布式预检
+## 第三步：分布式预检
 
 这一步使用正式 Stage I 模型、数据、forward、loss、backward、optimizer
 和 checkpoint，只将 optimizer step 缩短为 1：
@@ -196,7 +233,7 @@ scripts/reproduction/run_r4_training.sh distributed-preflight \
 - VLM 和 image-next loss 有限；
 - grad norm 有限且非零；
 - optimizer/scheduler 完成一步；
-- 模型 checkpoint 和 8 卡完整 training state 均可保存；
+- 模型 checkpoint 和当前 world size 的完整 training state 均可保存；
 - 无 OOM、NaN/Inf、NCCL 错误或 rank 丢失。
 
 首次预检通过后，必须从 step 1 的完整 state 恢复并完成 step 2：
@@ -207,8 +244,18 @@ scripts/reproduction/run_r4_training.sh distributed-resume-preflight \
 ```
 
 日志必须明确记录 `completed_steps=1`、`batches_seen`、dataset epoch，并在跳过
-已消费 batch 后完成 step 2。这才是 8 卡 save → load → resume 验收；仅检查目录
+已消费 batch 后完成 step 2。这才是分布式 save → load → resume 验收；仅检查目录
 存在不算通过。
+
+随后执行全阶段容量预检。它依次让 Stage I、Stage II 的三个子阶段和 Stage III
+各完成 1 个真实 optimizer step，验证最占显存阶段后才能开始正式长训练：
+
+```bash
+scripts/reproduction/run_r4_training.sh distributed-capacity-preflight \
+  2>&1 | tee "$REPRO_ROOT/r4-distributed-capacity-preflight.stdout.log"
+```
+
+成功标志为 `R4 DISTRIBUTED CAPACITY PREFLIGHT PASS`。
 
 另一终端监控：
 
@@ -229,7 +276,7 @@ scripts/reproduction/run_r4_training.sh distributed-preflight
 
 ## 第四步：Stage I 和 Stage II 正式训练
 
-8 卡预检通过后，在 tmux 中执行：
+分布式预检通过后，在 tmux 中执行：
 
 ```bash
 cd "$REPO"
