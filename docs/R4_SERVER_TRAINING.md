@@ -215,6 +215,16 @@ scripts/reproduction/run_r4_training.sh dry-run \
 `CUDA_VISIBLE_DEVICES` 选择非连续物理 GPU（例如 `0,2,6,7`）时仍使用对应的
 逻辑设备 `0,1,2,3`，避免 ProcessGroupNCCL 在尚未记录设备映射时推测设备。
 
+先运行轻量 NCCL 探针。它显式检查 rank 到物理 GPU 的映射，并执行真实
+`barrier + all_reduce`，120 秒内未完成会失败：
+
+```bash
+scripts/reproduction/run_r4_training.sh nccl-preflight \
+  2>&1 | tee "$REPRO_ROOT/r4-nccl-preflight.stdout.log"
+```
+
+成功标志为 `R4 NCCL PREFLIGHT PASS`。该探针通过后才加载正式模型。
+
 ```bash
 tmux new -s lara-r4
 cd "$REPO"

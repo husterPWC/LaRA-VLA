@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODE="${1:-}"
 if [[ -z "${MODE}" ]]; then
-  echo "用法: $0 {preflight|dry-run|distributed-preflight|distributed-resume-preflight|distributed-capacity-preflight|reasoning|stage3} [额外训练参数]" >&2
+  echo "用法: $0 {preflight|dry-run|nccl-preflight|distributed-preflight|distributed-resume-preflight|distributed-capacity-preflight|reasoning|stage3} [额外训练参数]" >&2
   exit 2
 fi
 shift
@@ -258,6 +258,15 @@ case "${MODE}" in
       GRADIENT_ACCUMULATION_STEPS="${R4_STAGE3_GRADIENT_ACCUMULATION:-1}" \
       bash "${REPO_ROOT}/scripts/run_laravla_libero.sh" \
         "${COMMON_ARGS[@]}" "${CACHE_ARGS[@]}" "${EXTRA_ARGS[@]}"
+    ;;
+  nccl-preflight)
+    check_paths
+    check_gpus_idle
+    write_metadata nccl-preflight
+    "${PYTHON_BIN}" -m torch.distributed.run \
+      --nproc_per_node="${NUM_GPUS}" \
+      --master_port="${MASTER_PORT}" \
+      "${REPO_ROOT}/scripts/reproduction/check_nccl.py"
     ;;
   distributed-preflight)
     check_paths
