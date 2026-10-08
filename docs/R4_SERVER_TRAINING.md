@@ -101,6 +101,41 @@ source scripts/reproduction/setup_r4_4gpu_env.sh 0,4,6,7
 GPU 数量、启动前显存占用以及三个阶段的 effective global batch。每次进入新
 终端或 tmux 都重新 source 一次该脚本。
 
+### RTX 5880 服务器的 NCCL P2P 兼容配置
+
+该服务器的 `nvidia-smi topo -p2p` 将 GPU peer access 报告为 `OK`，但真实
+NCCL collective 验证发现 P2P 数据路径不可用：
+
+- 默认 `P2P/CUMEM` 的第一个 1 元素 all-reduce 超时；
+- 关闭 CUMEM 后，`P2P/IPC` 仍超时；
+- `NCCL_P2P_LEVEL=PHB` 仍超时；
+- 同 NUMA 的物理 GPU `1,2` 和 `5,7` 分别进行双卡测试时均超时；
+- 同一组四卡完全关闭 P2P、使用 `SHM/direct/direct` 后通过 barrier、
+  all-reduce 和结果校验。
+
+因此四卡环境脚本默认设置：
+
+```bash
+NCCL_P2P_DISABLE=1
+```
+
+这是服务器通信兼容项，只把 NCCL 的 GPU Direct P2P 传输改为主机共享内存
+传输；模型、数据、loss、梯度、优化器、训练阶段和 effective global batch 均不
+改变。代价是通信可能变慢。脚本会清除定位问题时使用的
+`NCCL_CUMEM_ENABLE`、`NCCL_P2P_LEVEL` 和详细 debug 子系统，并在每次运行的
+`metadata/<mode>/run.env` 中记录最终 NCCL 配置。
+
+服务器是裸机，且存在 61 个 IOMMU group；这与裸机 IOMMU/PCIe ACS 导致
+CUDA P2P 实际传输异常的已知类型一致，但修改 BIOS、IOMMU 或 PCIe ACS 需要
+管理员验证。当前复现采用已经通过真实 collective 的 SHM 路径。管理员修复后，
+可先执行以下命令重新验证 P2P；未通过前不得用于正式训练：
+
+```bash
+export R4_NCCL_P2P_DISABLE=0
+source scripts/reproduction/setup_r4_4gpu_env.sh 1,2,5,7
+scripts/reproduction/run_r4_training.sh nccl-preflight
+```
+
 同步代码：
 
 ```bash
@@ -144,8 +179,8 @@ hf download physical-intelligence/fast \
 
 ## 第一步：数据与环境预检
 
-该步骤不执行模型训练，8 张 GPU 需要全部可见，但无需空闲。后续分布式预检和
-正式训练才要求所有训练 GPU 空闲。
+该步骤不执行模型训练，配置选择的 GPU 需要全部可见，但无需空闲。后续分布式
+预检和正式训练才要求所有训练 GPU 空闲。
 
 先单独验证刚传输的两个目录（读取约 2.1 GB）：
 
@@ -178,7 +213,7 @@ scripts/reproduction/run_r4_training.sh preflight \
 预检必须完成：
 
 - worktree 干净；
-- 恰好 8 张可见 GPU；
+- 可见 GPU 数量与配置一致（论文基线为 8，资源适配运行是固定 4）；
 - `pip check` 通过；
 - dataset revision 恰好为锁定 revision；
 - 四个 suite 都能解码真实图像和 8×7 action；
@@ -224,6 +259,9 @@ scripts/reproduction/run_r4_training.sh nccl-preflight \
 ```
 
 成功标志为 `R4 NCCL PREFLIGHT PASS`。该探针通过后才加载正式模型。
+使用 `R4_NCCL_DEBUG=INFO` 运行四卡探针时，日志应显示
+`SHM/direct/direct`，且不得出现 `P2P/IPC` 或 `P2P/CUMEM`。正式训练恢复
+默认 `NCCL_DEBUG=WARN`，避免生成大量通信调试日志。
 
 ```bash
 tmux new -s lara-r4
@@ -234,7 +272,7 @@ scripts/reproduction/run_r4_training.sh distributed-preflight \
 
 默认直接测试论文的每卡 batch 12。验收项：
 
-- 8 个 rank 都初始化；
+- 配置的所有 rank 都初始化；
 - effective global batch 为 96；
 - VLM 和 image-next loss 有限；
 - grad norm 有限且非零；

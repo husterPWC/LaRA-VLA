@@ -9,12 +9,13 @@
 - R2：已在服务器上完成官方 4 suite、2000 rollout 正式评估；
 - R3：在 R1 通过且服务器 R2 正式评估运行期间，按用户指示并行完成本机
   3090 官方训练链路 smoke；
-- R4：R2/R3 验收完成后进入 8 卡完整训练。
+- R4：R2/R3 验收完成后进入正式多阶段训练；共享服务器采用保持 effective
+  global batch 的固定 4 卡资源适配配置。
 
 当前没有加入 Spatial-LaRA 或我们自己的模型修改。服务器从零部署步骤见
 [R2 服务器复现手册](R2_SERVER_RUNBOOK.md)。
 R4 正式多阶段训练步骤见
-[R4 8 卡官方训练手册](R4_SERVER_TRAINING.md)。
+[R4 官方训练手册](R4_SERVER_TRAINING.md)。
 
 R2 服务器首次并行启动时发现，robosuite 1.4.0 要求
 `MUJOCO_EGL_DEVICE_ID` 是 `CUDA_VISIBLE_DEVICES` 中的物理 GPU ID。旧 wrapper
@@ -544,7 +545,7 @@ training state 位于被 Git 忽略的
 
 ## R4 正式训练准备
 
-R4 已完成本地启动链路审计，尚未宣布正式 8 卡训练通过。审计确认：
+R4 已完成本地启动链路审计，尚未宣布正式完整训练通过。审计确认：
 
 - 官方 `upstream/main` 仍为 `93b5c03c691e38a3c9e90878e76557009e2df261`，
   没有需要合并的新上游提交；
@@ -557,6 +558,22 @@ R4 已完成本地启动链路审计，尚未宣布正式 8 卡训练通过。�
 - 服务器 `/data` 审计时只剩约 893 GB，Stage III 不能无界保留
   大体积 DeepSpeed state。
 
+共享服务器随后选择固定 4 个 DDP rank，并用 gradient accumulation 保持论文
+effective global batch。分布式预检发现主机的 NCCL GPU P2P 数据路径异常：
+
+- 四 rank 均完成 communicator 初始化和逻辑/物理 GPU 映射；
+- 默认 `P2P/CUMEM`、关闭 CUMEM 后的 `P2P/IPC` 以及限制到
+  `NCCL_P2P_LEVEL=PHB` 的 collective 均在首个 all-reduce 超时；
+- 同 NUMA 的物理 GPU `1,2` 和 `5,7` 分别进行双卡 P2P/IPC 测试时均复现；
+- 完全关闭 P2P 后，物理 GPU `1,2,5,7` 通过四卡 SHM barrier 和 all-reduce，
+  且结果严格为期望值 `10.0`；
+- 服务器为裸机，存在 61 个 IOMMU group。IOMMU/PCIe ACS 是底层主机配置的
+  主要嫌疑，但需要管理员权限进一步确认。
+
+因此当前服务器的最小兼容项为 `NCCL_P2P_DISABLE=1`。它只改变 NCCL 传输
+路径，不改变模型、数据、loss、梯度、优化器、阶段或 effective global batch；
+可能降低多卡通信速度。CUMEM 保持自动检测，不保留定位期间的其他覆盖。
+
 最小工程修复不改训练目标：
 
 - launcher 现在安全转发 CLI override，支持阶段边界、dry-run 和可移植路径；
@@ -564,7 +581,9 @@ R4 已完成本地启动链路审计，尚未宣布正式 8 卡训练通过。�
 - 模型 `.pt` 全部保留；新增可选的完整 resume-state 保留数，R4 只在
   新 state 完整写入后滚动保留最新两份，默认 `null` 仍保留全部；
 - `scripts/reproduction/run_r4_training.sh` 只封装复现参数，仍调用官方
-  launcher 和同一个 `laravla/training/train.py`。
+  launcher 和同一个 `laravla/training/train.py`；
+- 四卡环境脚本显式设置并记录 `NCCL_P2P_DISABLE=1`，管理员修复 P2P 后可用
+  `R4_NCCL_P2P_DISABLE=0` 重新运行独立 collective 探针。
 
 数据集已从 5163 个 Hugging Face metadata 文件交叉确认 revision 均为
 `fbe4f71c2fd5a6e4f9171c78e51e2f6567277fff`。在全新临时目录生成的四个
